@@ -5,8 +5,8 @@ Preferred always-running mode (loads NO model at startup, lazy per-request):
 
 Legacy immediate-load mode (one model at startup, backwards compatible):
   .\Start-Diffusion.ps1 -Model DreamShaper_8
-  .\Start-Diffusion.ps1 -Model RealisticVision_V6_B1 -Remote
-Old short names still work: DreamShaper, RealisticVision, MeinaMix.
+  .\Start-Diffusion.ps1 -Model AbsoluteReality_1.8 -Remote
+Old short names still work: DreamShaper, AbsoluteReality.
 #>
 param(
   [string]$Model = "",
@@ -37,8 +37,7 @@ $config = Get-Content $ConfigPath -Raw | ConvertFrom-Json
 # Legacy short names -> registry friendly IDs.
 $AliasMap = @{
   "DreamShaper" = "DreamShaper_8"
-  "RealisticVision" = "RealisticVision_V6_B1"
-  "MeinaMix" = "MeinaMix_V11"
+  "AbsoluteReality" = "AbsoluteReality_1.8"
 }
 if ($Model -ne "" -and $AliasMap.ContainsKey($Model)) { $Model = $AliasMap[$Model] }
 

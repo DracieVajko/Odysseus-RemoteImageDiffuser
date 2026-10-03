@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.4.0 (unreleased)
+- Everything in English: docs, WebUI, scripts, contract
+- LAN setup alongside Tailscale (`-TailscaleIp` = any IP, LAN firewall example)
+- Detailed Odysseus wiring guide (endpoint + re-probe + timeouts)
+- Model swap: RealisticVision out, AbsoluteReality_1.8 in (all references)
+- Portable launchers (relative paths, Tailscale auto-detect, env overrides)
+
 ## 0.3.0 (unreleased)
 - Public-repo release: `models.json.example`, `systemd/` unit + env example,
   `LICENSE` (MIT), Linux quickstart (incl. honest RPi5/ARM64 note)

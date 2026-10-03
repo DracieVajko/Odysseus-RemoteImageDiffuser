@@ -6,7 +6,7 @@
 - **Port**: 8101 (8100 is taken by chromadb)
 - **Models**: 4 configured and tested
   - DreamShaper_8 (SD1.5, 768x768, no CPU offload)
-  - RealisticVision_V6_B1 (SD1.5, 768x768, no CPU offload)
+  - AbsoluteReality_1.8 (SD1.5, 768x768, no CPU offload)
   - AnimagineXL_3.1 (SDXL, 1024x1024, CPU offload ON)
   - JuggernautXL_v9 (SDXL, 1024x1024, CPU offload ON)
 - **Server Status**: Running on 0.0.0.0:8101
@@ -29,7 +29,7 @@ In Odysseus UI → Settings → AI Defaults → Image Endpoints:
 ### 2. Re-probe Models
 In Odysseus UI → Settings → AI Defaults:
 - Click "Re-probe" / "Refresh" on the image endpoint
-- Should discover 4 models: DreamShaper_8, RealisticVision_V6_B1, AnimagineXL_3.1, JuggernautXL_v9
+- Should discover 4 models: DreamShaper_8, AbsoluteReality_1.8, AnimagineXL_3.1, JuggernautXL_v9
 
 ### 3. Verify Image Generation Dropdown
 Settings → AI Defaults → Image Generation:
@@ -71,7 +71,7 @@ curl -X POST http://<WINDOWS-TAILSCALE-IP>:8101/v1/images/inpaint \
 | Model | Type | Resolution | Cold Load | Warm Gen | VRAM |
 |-------|------|------------|-----------|----------|------|
 | DreamShaper_8 | SD1.5 | 768x768 / 1024x1024 | ~85s / 13s | ~13s | ~3.1 GB |
-| RealisticVision_V6_B1 | SD1.5 | 768x768 / 1024x1024 | ~46s / 14s | ~14s | ~3.1 GB |
+| AbsoluteReality_1.8 | SD1.5 | 768x768 / 1024x1024 | ~46s / 14s | ~14s | ~3.1 GB |
 | AnimagineXL_3.1 | SDXL | 1024x1024 / 1920x1080 | ~179s / 30s | ~30s | ~5.5 GB |
 | JuggernautXL_v9 | SDXL | 1024x1024 / 1920x1080 | ~199s / 38s | ~38s | ~6.5 GB |
 

@@ -82,7 +82,7 @@ def main():
 
     def load_rv():
         res_a["r"] = post_json("/v1/images/generations",
-                               {"model": "RealisticVision_V6_B1", "prompt": "a cabin",
+                               {"model": "AbsoluteReality_1.8", "prompt": "a cabin",
                                 "size": "512x512", "quality": "low", "n": 1, "request_id": rid_a})
 
     t = threading.Thread(target=load_rv, daemon=True)
@@ -106,18 +106,18 @@ def main():
 
     # 3) 400s (model warm now -> fast, no load involved)
     st, b = post_json("/v1/images/generations",
-                      {"model": "RealisticVision_V6_B1", "prompt": "x", "size": "1x1",
+                      {"model": "AbsoluteReality_1.8", "prompt": "x", "size": "1x1",
                        "quality": "low", "n": 1})
     check("400-tiny-size", st == 400, f"status={st} {str(b)[:100]}")
     st, b = post_json("/v1/images/generations",
-                      {"model": "RealisticVision_V6_B1", "prompt": "x", "size": "512x512",
+                      {"model": "AbsoluteReality_1.8", "prompt": "x", "size": "512x512",
                        "quality": "low", "n": 99})
     check("400-bad-n", st == 400, f"status={st}")
     st, b = post_json("/v1/images/inpaint",
                       {"image": "!!!not-base64!!!", "mask": "!!!", "prompt": "x", "model": ""})
     check("400-bad-b64", st == 400, f"status={st} {str(b)[:100]}")
     st, b = post_multipart("/v1/images/edits",
-                           {"prompt": "x", "model": "RealisticVision_V6_B1", "size": "512x512",
+                           {"prompt": "x", "model": "AbsoluteReality_1.8", "size": "512x512",
                             "quality": "low", "strength": "0.75"},
                            {"image": ("evil.txt", b"this is not an image", "text/plain")})
     check("400-bad-upload", st == 400, f"status={st} {str(b)[:100]}")
@@ -137,7 +137,7 @@ def main():
     st, b = post_json("/v1/images/inpaint",
                       {"image": base64.b64encode(bi.getvalue()).decode(),
                        "mask": base64.b64encode(bm.getvalue()).decode(),
-                       "prompt": "blue square", "model": "RealisticVision_V6_B1",
+                       "prompt": "blue square", "model": "AbsoluteReality_1.8",
                        "steps": 4, "strength": 0.8, "request_id": rid_i}, timeout=300)
     check("inpaint-200", st == 200, f"status={st} {str(b)[:100]}")
     check("rid-echo-inpaint", b.get("request_id") == rid_i)

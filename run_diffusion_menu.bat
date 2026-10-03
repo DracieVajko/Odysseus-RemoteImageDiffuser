@@ -20,8 +20,8 @@ set MODEL_1_NAME=DreamShaper 8 (General/Art/Realism, SD1.5)
 set MODEL_1_BASE=768x768
 set MODEL_1_MAX=1024x1024
 
-set MODEL_2_ID=RealisticVision_V6_B1
-set MODEL_2_NAME=Realistic Vision V6.0 B1 (Photorealism, SD1.5)
+set MODEL_2_ID=AbsoluteReality_1.8
+set MODEL_2_NAME=Absolute Reality 1.8.1 (Photorealism, SD1.5)
 set MODEL_2_BASE=768x768
 set MODEL_2_MAX=1024x1024
 

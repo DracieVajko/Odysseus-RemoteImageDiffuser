@@ -11,9 +11,9 @@ import requests
 import time
 from datetime import datetime
 
-# Configuration
-SERVER_DIR = r"D:\AI\DiffusionServer"
-SERVER_URL = "http://127.0.0.1:8101"
+# Configuration (relative to this script: portable, no hardcoded paths)
+SERVER_DIR = os.path.dirname(os.path.abspath(__file__))
+SERVER_URL = os.environ.get("DIFFUSION_URL", "http://127.0.0.1:8101")
 OUTPUT_DIR = os.path.join(SERVER_DIR, "tests", "output")
 NEGATIVE_PROMPT = "blurry, low quality, low resolution, bad anatomy, deformed, distorted, extra fingers, missing fingers, bad hands, text, watermark, oversaturated, artifacts"
 
@@ -25,8 +25,8 @@ MODELS = {
         "max": "1024x1024"
     },
     "2": {
-        "id": "RealisticVision_V6_B1",
-        "name": "Realistic Vision V6.0 B1 (Photorealism, SD1.5)",
+        "id": "AbsoluteReality_1.8",
+        "name": "Absolute Reality 1.8.1 (Photorealism, SD1.5)",
         "base": "768x768",
         "max": "1024x1024"
     },

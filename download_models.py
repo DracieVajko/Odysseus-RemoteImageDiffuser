@@ -3,7 +3,7 @@
 
 Presets (all from public HuggingFace repos, no login needed):
   odysseus-default : all 4 models below (~19 GB)
-  sd15             : DreamShaper_8 + RealisticVision (~5 GB)
+  sd15             : DreamShaper_8 + AbsoluteReality_1.8 (~5 GB)
   sdxl             : AnimagineXL_3.1 + JuggernautXL_v9 (~14 GB)
 
 Usage:
