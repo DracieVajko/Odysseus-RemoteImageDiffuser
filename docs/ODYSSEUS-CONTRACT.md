@@ -1,0 +1,39 @@
+# Odysseus integration contract (server side, frozen)
+
+Base: `http://<host>:8101`. No auth on LAN. All image routes accept `model`
+(registry id, empty = default) and `request_id` (echoed back in every response;
+poll it while waiting).
+
+## Endpoints
+
+| Method | Path | In | Out |
+|---|---|---|---|
+| GET | `/health` | — | `{status, model, current_model, available_models, loading, loading_model, busy, queue}` |
+| GET | `/v1/models` | — | `{data:[{id, object, owned_by, available, guessed}], currently_loaded_model, loading, loading_model, missing_models}` |
+| GET | `/v1/images/progress/{request_id}` | — | `{id, status: running\|done\|error\|loading\|unknown, step, total, percent}` (`loading` = cold load in progress, no steps yet) |
+| POST | `/v1/images/generations` | JSON `{model, prompt, n 1..4, size WxH, quality, request_id}` | `{created, data:[{b64_json}], request_id}` |
+| POST | `/v1/images/edits` | multipart `image + prompt, model, n, size, quality, strength 0.1..1, request_id` | same as generations |
+| POST | `/v1/images/inpaint` | JSON `{image b64, mask b64, prompt, width, height, steps, strength, feather, model, request_id}` | `{image b64, elapsed, request_id}` |
+| POST | `/v1/images/harmonize` | JSON `{image b64, prompt, color_match, seam_fix, body_mask?, seam_mask?, mask?, strength?, max_side, steps, model, request_id}` | `{image b64, elapsed, request_id}` |
+| GET | `/webui` | — | single-file HTML UI (humans only, same-origin) |
+
+## Quality → steps
+
+`low=4`, `medium`=profile default (25), `high=30`, `auto=12`. Recommended
+default for clients: `medium`.
+
+## Status codes
+
+- `200` + image: success (check the PNG, not just the code)
+- `400`: bad input (`Size 1x1 too small`, `n must be 1..4`, bad base64/image)
+- `503 {"error":"loading model","loading_model":..., "retry_after":30}`:
+  cold load in progress — wait and retry, do NOT treat as failure
+- `500`: real server failure, see server logs (never for queueing/validation)
+
+## Timing guidance for clients
+
+- Cold load (model switch): SD1.5 ~1–3 min, SDXL ~3–6 min. Only ONE model is
+  resident — every switch costs a full load.
+- Recommended client timeouts: generations/edits/inpaint ≥300 s (1024px/high
+  up to ~420 s on 6 GB VRAM). Progress-poll `/v1/images/progress/{id}` for UX.
+- `busy:true` / `queue:N` in `/health` = server works, don't resend.

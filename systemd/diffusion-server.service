@@ -1,0 +1,21 @@
+[Unit]
+Description=DiffusionServer - lazy OpenAI-compatible image API (Odysseus optional backend)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+# Copy diffusion-server.env.example to /etc/diffusion-server.env and adjust:
+# WORKDIR (repo path), USER, HF cache, port/host.
+User=ai
+WorkingDirectory=/opt/diffusion-server
+EnvironmentFile=/etc/diffusion-server.env
+ExecStart=/opt/diffusion-server/.venv/bin/python diffusion_server.py --lazy
+Restart=on-failure
+RestartSec=10
+# Keep stdout in the journal: journalctl -u diffusion-server -f
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

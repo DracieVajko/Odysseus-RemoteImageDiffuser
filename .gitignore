@@ -1,0 +1,35 @@
+# Python
+.venv/
+__pycache__/
+*.pyc
+
+# Models (downloaded via download_models.py, never committed)
+models/
+*.safetensors
+*.ckpt
+*.bin
+*.pt
+
+# Runtime
+logs/
+run/
+*.log
+*.bak*
+.hf-test/
+.hf_cache/
+
+# Test outputs
+warmtest*.png
+edittest*.png
+safetytest*.png
+vis-*.png
+output/
+
+# Local machine config (copy models.json.example -> models.json and adjust)
+models.json
+
+# OS / editors
+Thumbs.db
+Desktop.ini
+.vscode/
+.idea/

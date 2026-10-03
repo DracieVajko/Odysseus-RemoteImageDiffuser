@@ -1,0 +1,204 @@
+<!DOCTYPE html>
+<html lang="sk">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>DiffusionServer WebUI</title>
+<style>
+:root { color-scheme: dark; }
+body { font-family: system-ui, Segoe UI, Arial, sans-serif; background: #14161a; color: #e8eaf0; margin: 0; }
+header { padding: 12px 16px; background: #1d2127; border-bottom: 1px solid #333; display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
+header h1 { font-size: 18px; margin: 0; }
+#status { font-size: 13px; color: #9fb3c8; }
+#status b.ok { color: #7ee787; } #status b.bad { color: #ff7b72; }
+main { display: grid; grid-template-columns: 380px 1fr; gap: 16px; padding: 16px; }
+@media (max-width: 900px) { main { grid-template-columns: 1fr; } }
+.panel { background: #1d2127; border: 1px solid #333; border-radius: 8px; padding: 14px; }
+.tabs { display: flex; gap: 8px; margin-bottom: 12px; }
+.tabs button { flex: 1; padding: 8px; border-radius: 6px; border: 1px solid #444; background: #262b33; color: #fff; cursor: pointer; }
+.tabs button.active { background: #2f81f7; border-color: #2f81f7; }
+label { display: block; font-size: 13px; margin: 10px 0 4px; color: #9fb3c8; }
+input[type=text], textarea, select { width: 100%; box-sizing: border-box; background: #0f1114; color: #fff; border: 1px solid #444; border-radius: 6px; padding: 8px; }
+textarea { min-height: 70px; resize: vertical; }
+.row { display: flex; gap: 8px; } .row > div { flex: 1; }
+button.go { width: 100%; margin-top: 12px; padding: 10px; font-size: 15px; border: 0; border-radius: 6px; background: #238636; color: #fff; cursor: pointer; }
+button.go:disabled { opacity: .5; cursor: wait; }
+#warn { background: #5a2d0c; border: 1px solid #a35c00; border-radius: 6px; padding: 8px 10px; font-size: 13px; margin-bottom: 10px; display: none; }
+#gallery { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 12px; }
+figure { margin: 0; background: #1d2127; border: 1px solid #333; border-radius: 8px; overflow: hidden; }
+figure img { width: 100%; display: block; }
+figcaption { font-size: 12px; padding: 8px 10px; color: #9fb3c8; word-break: break-word; }
+figcaption a { color: #2f81f7; }
+#log { font-size: 12px; white-space: pre-wrap; background: #0f1114; border: 1px solid #333; border-radius: 6px; padding: 8px; min-height: 60px; margin-top: 10px; }
+img.preview { max-width: 100%; border-radius: 6px; border: 1px solid #444; margin-top: 6px; }
+</style>
+</head>
+<body>
+<header>
+<h1>DiffusionServer WebUI</h1>
+<span id="status">pripájam…</span>
+<button onclick="refresh()" style="margin-left:auto;padding:6px 12px;border-radius:6px;border:1px solid #444;background:#262b33;color:#fff;cursor:pointer">Obnoviť</button>
+</header>
+<main>
+<div class="panel">
+<div id="warn"></div>
+<div class="tabs">
+<button id="tabTxt" class="active" onclick="showTab('txt')">Text → Image</button>
+<button id="tabImg" onclick="showTab('img')">Referencia → Image</button>
+</div>
+<label>Model</label>
+<select id="model"><option value="">(načíta sa…)</option></select>
+<div id="formTxt">
+<label>Prompt</label>
+<textarea id="prompt" placeholder="a cozy mountain cabin at sunset, pine forest, detailed"></textarea>
+<div class="row">
+<div><label>Veľkosť</label><select id="size"><option>512x512</option><option selected>768x768</option><option>1024x1024</option></select></div>
+<div><label>Kvalita</label><select id="quality"><option value="low">low (rýchle)</option><option value="medium" selected>medium</option><option value="high">high (pomalé)</option></select></div>
+</div>
+<button class="go" id="btnTxt" onclick="generateTxt()">Generovať</button>
+</div>
+<div id="formImg" style="display:none">
+<label>Referenčný obrázok</label>
+<input type="file" id="refimg" accept="image/*" onchange="previewRef(this)">
+<img id="refprev" class="preview" style="display:none">
+<label>Prompt (čo zmeniť / v akom štýle)</label>
+<textarea id="prompt2" placeholder="same cabin in winter, snow, night lights"></textarea>
+<div class="row">
+<div><label>Veľkosť</label><select id="size2"><option>512x512</option><option selected>768x768</option><option>1024x1024</option></select></div>
+<div><label>Kvalita</label><select id="quality2"><option value="low">low</option><option value="medium" selected>medium</option><option value="high">high</option></select></div>
+</div>
+<label>Sila zmeny (0.1 = skoro originál, 1.0 = úplne nové): <span id="strval">0.75</span></label>
+<input type="range" id="strength" min="0.1" max="1" step="0.05" value="0.75" style="width:100%" oninput="document.getElementById('strval').textContent=this.value">
+<button class="go" id="btnImg" onclick="generateImg()">Generovať z referencie</button>
+</div>
+<div id="log"></div>
+</div>
+<div>
+<div id="gallery"></div>
+</div>
+</main>
+<script>
+let MODELS = [];
+function log(m){ const el=document.getElementById('log'); el.textContent = new Date().toLocaleTimeString()+' '+m+'\n'+el.textContent; }
+function showTab(t){
+  document.getElementById('tabTxt').classList.toggle('active', t==='txt');
+  document.getElementById('tabImg').classList.toggle('active', t==='img');
+  document.getElementById('formTxt').style.display = t==='txt'?'block':'none';
+  document.getElementById('formImg').style.display = t==='img'?'block':'none';
+}
+function previewRef(inp){
+  const f = inp.files[0]; if(!f) return;
+  const img = document.getElementById('refprev');
+  img.src = URL.createObjectURL(f); img.style.display='block';
+}
+async function refresh(){
+  const st = document.getElementById('status');
+  try {
+    const h = await (await fetch('/health')).json();
+    const m = await (await fetch('/v1/models')).json();
+    MODELS = m.data || [];
+    const sel = document.getElementById('model');
+    sel.innerHTML = '';
+    for (const x of MODELS) {
+      const o = document.createElement('option');
+      o.value = x.id; o.textContent = x.available === false ? x.id+' (nedostupný)' : x.id;
+      sel.appendChild(o);
+    }
+    const miss = m.missing_models || [];
+    const w = document.getElementById('warn');
+    if (miss.length) { w.style.display='block'; w.textContent = 'Chýbajú súbory modelov: '+miss.join(', ')+'. Generovanie zlyhá, kým sa neobnovia do D:\\AI\\DiffusionServer\\models.'; }
+    else { w.style.display='none'; }
+    st.innerHTML = 'server <b class="ok">OK</b> · modely: '+MODELS.length+' · načítaný: '+(h.model||'žiadny (lazy)')
+      + (h.busy ? ' · <b class="bad">PRACUJE</b> (fronta: '+(h.queue||0)+')' : '');
+  } catch(e){ st.innerHTML = 'server <b class="bad">NEDOSTUPNÝ</b> · '+e; }
+}
+function rid(){ return Math.random().toString(16).slice(2)+Date.now().toString(16); }
+function addCard(src, caption, fname){
+  const g = document.getElementById('gallery');
+  const fig = document.createElement('figure');
+  const img = document.createElement('img'); img.src = src;
+  const cap = document.createElement('figcaption');
+  const a = document.createElement('a'); a.href = src; a.download = fname||'image.png'; a.textContent = 'stiahnuť PNG';
+  cap.textContent = caption+' ';
+  cap.appendChild(a); fig.appendChild(img); fig.appendChild(cap);
+  g.prepend(fig);
+}
+async function pollProgress(id, btn){
+  const t0 = Date.now();
+  let errs = 0;
+  while (Date.now()-t0 < 1000*60*10) {
+    await new Promise(r=>setTimeout(r, 2000));
+    let p = null;
+    try { p = await (await fetch('/v1/images/progress/'+id)).json(); }
+    catch(e){ if(++errs > 5) break; else continue; }
+    if (p && p.status && p.status!=='unknown') {
+      btn.textContent = 'Generujem… '+ (p.percent||0) +'%';
+      if (p.status==='done'||p.status==='error') break;
+    }
+    // 'unknown' = server entry not created yet (request in flight) -> keep waiting
+  }
+}
+async function generateTxt(){
+  const btn = document.getElementById('btnTxt');
+  const body = { model: document.getElementById('model').value,
+    prompt: document.getElementById('prompt').value.trim(),
+    size: document.getElementById('size').value,
+    quality: document.getElementById('quality').value, n: 1, request_id: rid() };
+  if(!body.prompt){ alert('Zadaj prompt'); return; }
+  btn.disabled = true; btn.textContent = 'Generujem…';
+  log('POST /v1/images/generations model='+body.model);
+  pollProgress(body.request_id, btn);
+  const t0 = Date.now();
+  try {
+    const r = await fetch('/v1/images/generations',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+    const j = await r.json();
+    if(!r.ok){ log('CHYBA '+r.status+': '+JSON.stringify(j).slice(0,500)); alert('Chyba '+r.status+': '+JSON.stringify(j).slice(0,300)); return; }
+    const secs = ((Date.now()-t0)/1000).toFixed(1);
+    for (const d of (j.data||[])) {
+      addCard('data:image/png;base64,'+d.b64_json, body.model+' · '+body.prompt.slice(0,80)+' · '+secs+'s', 'txt_'+Date.now()+'.png');
+    }
+    log('hotovo za '+secs+'s');
+  } catch(e){ log('CHYBA: '+e); } finally { btn.disabled=false; btn.textContent='Generovať'; refresh(); }
+}
+async function generateImg(){
+  const btn = document.getElementById('btnImg');
+  const f = document.getElementById('refimg').files[0];
+  const prompt = document.getElementById('prompt2').value.trim();
+  if(!f){ alert('Vyber referenčný obrázok'); return; }
+  if(!prompt){ alert('Zadaj prompt'); return; }
+  const fd = new FormData();
+  fd.append('prompt', prompt);
+  fd.append('image', f);
+  fd.append('model', document.getElementById('model').value);
+  fd.append('size', document.getElementById('size2').value);
+  fd.append('quality', document.getElementById('quality2').value);
+  fd.append('strength', document.getElementById('strength').value);
+  const id = rid(); fd.append('request_id', id);
+  btn.disabled = true; btn.textContent = 'Generujem…';
+  log('POST /v1/images/edits model='+document.getElementById('model').value);
+  pollProgress(id, btn);
+  const t0 = Date.now();
+  try {
+    const r = await fetch('/v1/images/edits',{method:'POST',body:fd});
+    const j = await r.json();
+    if(!r.ok){ log('CHYBA '+r.status+': '+JSON.stringify(j).slice(0,500)); alert('Chyba '+r.status+': '+JSON.stringify(j).slice(0,300)); return; }
+    const secs = ((Date.now()-t0)/1000).toFixed(1);
+    const items = j.data || (j.image ? [{b64_json:j.image}] : []);
+    for (const d of items) {
+      addCard('data:image/png;base64,'+d.b64_json, 'img2img · '+prompt.slice(0,80)+' · '+secs+'s', 'img2img_'+Date.now()+'.png');
+    }
+    log('hotovo za '+secs+'s');
+  } catch(e){ log('CHYBA: '+e); } finally { btn.disabled=false; btn.textContent='Generovať z referencie'; refresh(); }
+}
+refresh();
+try {
+  for (const id of ['model','prompt','prompt2','size','size2','quality','quality2','strength']) {
+    const el = document.getElementById(id);
+    const saved = localStorage.getItem('ds_'+id);
+    if (saved !== null && el) { el.value = saved; if(id==='strength') document.getElementById('strval').textContent = saved; }
+    if (el) el.addEventListener('change', () => localStorage.setItem('ds_'+id, el.value));
+  }
+} catch(e){}
+</script>
+</body>
+</html>
