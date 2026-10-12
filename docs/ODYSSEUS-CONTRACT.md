@@ -31,6 +31,7 @@ default for clients: `medium`.
 - `503 {"error":"will not load",...}`:
   model fits neither VRAM nor RAM right now — do NOT retry blindly; free VRAM
   (close other GPU apps) or RAM first. Answered immediately, no hanging.
+  Same shape for OOM during load *or* inference (e.g. absurd canvas).
 - `500`: real server failure, see server logs (never for queueing/validation)
 
 ## Timing guidance for clients
@@ -40,6 +41,9 @@ default for clients: `medium`.
 - VRAM short? The server loads on CPU from RAM automatically when it fits
   there (works, MUCH slower — close LM Studio for full speed). Fits nowhere:
   immediate `will not load`, no hanging.
+- Canvas caps: generations keep a 2048px VRAM-fit cap; edits/inpaint/harmonize
+  accept any sane size (DoS guard 8192px) and force CPU offload on big
+  canvases instead of refusing. OOM anywhere → 503, never a hang.
 - Recommended client timeouts: generations/edits/inpaint ≥300 s (1024px/high
   up to ~420 s on 6 GB VRAM). Progress-poll `/v1/images/progress/{id}` for UX.
 - `busy:true` / `queue:N` in `/health` = server works, don't resend.

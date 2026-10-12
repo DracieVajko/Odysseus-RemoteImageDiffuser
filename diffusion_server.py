@@ -282,8 +282,12 @@ MIN_SIDE = 64
 MAX_SIDE = 2048
 
 
-def _require_size(size: str) -> tuple[int, int]:
-    """Parse WxH, rejecting degenerate canvases with 400 (never 500)."""
+def _require_size(size: str, max_side: int | None = MAX_SIDE) -> tuple[int, int]:
+    """Parse WxH, rejecting degenerate canvases with 400 (never 500).
+
+    max_side=None means no upper cap (edits/inpaint: offload instead of
+    refusing); generations keep the VRAM-fit default cap.
+    """
     try:
         w, h = (size or "").split("x")
         w, h = int(w), int(h)
@@ -293,10 +297,22 @@ def _require_size(size: str) -> tuple[int, int]:
     if w < MIN_SIDE or h < MIN_SIDE:
         raise HTTPException(status_code=400,
                             detail=f"Size {w}x{h} too small, minimum is {MIN_SIDE}x{MIN_SIDE}.")
-    if w > MAX_SIDE or h > MAX_SIDE:
+    if max_side is not None and (w > max_side or h > max_side):
         raise HTTPException(status_code=400,
-                            detail=f"Size {w}x{h} too large, maximum is {MAX_SIDE}x{MAX_SIDE}.")
+                            detail=f"Size {w}x{h} too large, maximum is {max_side}x{max_side}.")
     return w, h
+
+
+ABS_MAX_SIDE = 8192  # DoS guard for uncapped routes (67 MP); real requests never hit it.
+
+
+def _pixels_of_size(size: str) -> int:
+    """Canvas area for load planning (0 when unparseable; validated later)."""
+    try:
+        w, h = (size or "").split("x")
+        return max(0, int(w) * int(h))
+    except Exception:
+        return 0
 
 
 def _decode_image_b64(b64: str, name: str):
@@ -915,15 +931,17 @@ def _weights_gb(model_id: str) -> float:
     return 0.0
 
 
-def _plan_device(model_id: str) -> dict:
+def _plan_device(model_id: str, pixels: int = 0) -> dict:
     """Decide where a model can run BEFORE loading (fast answer, no hanging).
 
-    - VRAM fits      -> CUDA + profile dtype (unchanged fast path).
+    - VRAM fits (weights + workspace + canvas activations) -> CUDA + profile
+      dtype (unchanged fast path).
     - VRAM short but RAM fits -> CPU fp32 fallback (works, MUCH slower).
-    - Neither fits   -> HTTPException 503 'will not load' immediately,
+    - Neither fits -> HTTPException 503 'will not load' immediately,
       so clients never wait out a timeout for the impossible.
     """
-    need_mib = int(_weights_gb(model_id) * 1024 * 1.3) + 1024  # weights + workspace
+    act_mib = int(max(0, pixels) / 1_000_000 * 1200)  # ~1.2 GB per MP, SDXL-side estimate
+    need_mib = int(_weights_gb(model_id) * 1024 * 1.3) + 1024 + act_mib
     vram_free = 0
     try:
         if torch.cuda.is_available():
@@ -954,6 +972,19 @@ def _plan_device(model_id: str) -> dict:
     })
 
 
+def _convert_oom(e: Exception, req_id: str):
+    """Endpoint guards: OOM (VRAM or RAM, load or inference) becomes a fast
+    503 'will not load' with a downscale hint; anything else re-raises."""
+    _finish_progress(req_id or "", "error", str(e))
+    if isinstance(e, torch.OutOfMemoryError) or "out of memory" in str(e).lower():
+        raise HTTPException(status_code=503, detail={
+            "error": "will not load",
+            "reason": f"Out of memory during inference: {str(e)[:200]}",
+            "hint": "Retry smaller (<=1024px, low quality) or free VRAM/RAM.",
+        })
+    raise e
+
+
 def _resolve_model_id(requested: str | None) -> str:
     mid = (requested or "").strip()
     if not mid:
@@ -969,8 +1000,11 @@ def _resolve_model_id(requested: str | None) -> str:
     return mid
 
 
-def ensure_model_loaded(requested: str | None) -> str:
+def ensure_model_loaded(requested: str | None, pixels: int = 0) -> str:
     """Load the requested registry model on demand (thread-safe).
+
+    pixels = canvas area the caller is about to render (0 = unknown/bounded
+    internally, e.g. inpaint which downscales its work area itself).
 
     Reuses the resident pipeline when it already matches. Otherwise unloads
     the current model (+ derived inpaint/img2img pipes), clears CUDA caches,
@@ -1005,7 +1039,13 @@ def ensure_model_loaded(requested: str | None) -> str:
                 logger.info("Loading model: %s", model_id)
             unload_current_model()
             _apply_profile(model_id)
-            plan = _plan_device(model_id)
+            if pixels > 1_500_000 and not _args.cpu_offload:
+                # Big canvas: force layer offload so it fits over VRAM+RAM
+                # instead of dying at full resolution (slower, survives).
+                _args.cpu_offload = True
+                logger.info("Large canvas (~%.1f MP): CPU offload forced for '%s'.",
+                            pixels / 1_000_000, model_id)
+            plan = _plan_device(model_id, pixels)
             try:
                 load_model(device=plan["device"], dtype=plan["dtype"])
             except HTTPException:
@@ -1489,14 +1529,13 @@ def generate_image(req: ImageRequest):
             return _loading_503()
         with _tracked_model_lock():
             try:
-                selected = ensure_model_loaded(req.model)
+                selected = ensure_model_loaded(req.model, _pixels_of_size(req.size))
                 logger.info("Requested model: %s", selected)
                 return _generate_locked(req)
             except HTTPException:
                 raise
             except Exception as e:
-                _finish_progress(req.request_id, "error", str(e))
-                raise
+                _convert_oom(e, req.request_id)
     if _pipe is None:
         return {"error": "Model not loaded"}
 
@@ -1608,15 +1647,14 @@ async def edit_image(
             return _loading_503()
         with _tracked_model_lock():
             try:
-                selected = ensure_model_loaded(model)
+                selected = ensure_model_loaded(model, _pixels_of_size(size))
                 logger.info("Requested model: %s", selected)
                 return await _run_edit(prompt, raw, n, size, quality, strength,
                                        response_format, request_id)
             except HTTPException:
                 raise
             except Exception as e:
-                _finish_progress(request_id, "error", str(e))
-                raise
+                _convert_oom(e, request_id)
     return await _run_edit(prompt, raw, n, size, quality, strength,
                            response_format, request_id)
 
@@ -1630,7 +1668,7 @@ async def _run_edit(prompt, raw, n, size, quality, strength, response_format, re
 
     from PIL import Image as PILImage, ImageOps
 
-    width, height = _require_size(size)
+    width, height = _require_size(size, ABS_MAX_SIDE)
     steps = _quality_steps(quality)
     strength = max(0.1, min(1.0, float(strength or 0.75)))
     request_id = _start_progress(request_id, steps * max(1, min(int(n or 1), 4)), prompt, "edit")
@@ -1894,8 +1932,7 @@ def inpaint_image(req: InpaintRequest):
             except HTTPException:
                 raise
             except Exception as e:
-                _finish_progress(req.request_id, "error", str(e))
-                raise
+                _convert_oom(e, req.request_id)
     return _inpaint_locked(req)
 
 
@@ -1919,6 +1956,9 @@ def _inpaint_locked(req: InpaintRequest):
     if width < MIN_SIDE or height < MIN_SIDE:
         raise HTTPException(status_code=400,
                             detail=f"Canvas {width}x{height} too small, minimum is {MIN_SIDE}x{MIN_SIDE}.")
+    if width > ABS_MAX_SIDE or height > ABS_MAX_SIDE:
+        raise HTTPException(status_code=400,
+                            detail=f"Canvas {width}x{height} absurd, maximum is {ABS_MAX_SIDE}x{ABS_MAX_SIDE}.")
 
     default_steps = _args.steps or 12
     steps = req.steps or default_steps
@@ -2277,8 +2317,7 @@ def harmonize_image(req: HarmonizeRequest):
             except HTTPException:
                 raise
             except Exception as e:
-                _finish_progress(req.request_id, "error", str(e))
-                raise
+                _convert_oom(e, req.request_id)
     return _harmonize_locked(req)
 
 
@@ -2313,6 +2352,9 @@ def _harmonize_locked(req: HarmonizeRequest):
     if orig_w < MIN_SIDE or orig_h < MIN_SIDE:
         raise HTTPException(status_code=400,
                             detail=f"Image {orig_w}x{orig_h} too small, minimum is {MIN_SIDE}x{MIN_SIDE}.")
+    if orig_w > ABS_MAX_SIDE or orig_h > ABS_MAX_SIDE:
+        raise HTTPException(status_code=400,
+                            detail=f"Image {orig_w}x{orig_h} absurd, maximum is {ABS_MAX_SIDE}x{ABS_MAX_SIDE}.")
     request_id = _start_progress(req.request_id,
                                  max(1, int(req.steps or 0) or (_args.steps or 12)),
                                  req.prompt, "harmonize")

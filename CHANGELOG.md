@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.6.0 (unreleased)
+- No size cap on edits/inpaint/harmonize (DoS guard 8192px); big canvases
+  force CPU offload automatically; generations keep the 2048px VRAM-fit cap
+- Load planning counts canvas activations; inference OOM → 503 `will not load`
+
 ## 0.5.0 (unreleased)
 - VRAM-aware loading: fits VRAM → CUDA; VRAM short but RAM fits → CPU fp32
   fallback (slow but works); fits nowhere → immediate 503 `will not load`
