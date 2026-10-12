@@ -834,6 +834,7 @@ def _apply_profile(model_id: str):
 def unload_current_model():
     """Destroy resident pipelines and reclaim VRAM. Safe to call when empty."""
     global _pipe, _model_id, _inpaint_pipe, _img2img_pipe, _ACTIVE_PROFILE
+    global _LOAD_DEVICE, _LOAD_DTYPE
     if _pipe is None and _model_id == "":
         return False
     old = _model_id or "(unknown)"
@@ -844,6 +845,8 @@ def unload_current_model():
     _pipe = None
     _model_id = ""
     _ACTIVE_PROFILE = None
+    _LOAD_DEVICE = None
+    _LOAD_DTYPE = None
     gc.collect()
     try:
         torch.cuda.empty_cache()
@@ -857,6 +860,98 @@ def unload_current_model():
     after = _cuda_mem()
     logger.info("Unloaded '%s'. VRAM before=%s after=%s", old, before, after)
     return True
+
+
+# Device/dtype actually used by the resident pipeline (set on successful
+# load, cleared on unload). Derived img2img/inpaint pipes must match these,
+# not the profile defaults (CPU fallback loads fp32 on cpu).
+_LOAD_DEVICE: str | None = None
+_LOAD_DTYPE: str | None = None
+
+
+def _active_device() -> str:
+    return _LOAD_DEVICE or _target_device()
+
+
+def _active_torch_dtype():
+    return DTYPE_MAP.get(_LOAD_DTYPE or (_args.dtype if _args else "bfloat16"),
+                         torch.bfloat16)
+
+
+def _ram_free_mib() -> int:
+    try:
+        import psutil  # type: ignore
+        return int(psutil.virtual_memory().available // 1048576)
+    except Exception:
+        pass
+    try:
+        import ctypes
+
+        class _MF(ctypes.Structure):
+            _fields_ = [("dwLength", ctypes.c_ulong), ("dwMemoryLoad", ctypes.c_ulong),
+                        ("ullTotalPhys", ctypes.c_ulonglong), ("ullAvailPhys", ctypes.c_ulonglong),
+                        ("ullTotalPageFile", ctypes.c_ulonglong), ("ullAvailPageFile", ctypes.c_ulonglong),
+                        ("ullTotalVirtual", ctypes.c_ulonglong), ("ullAvailVirtual", ctypes.c_ulonglong),
+                        ("ullAvailExtendedVirtual", ctypes.c_ulonglong)]
+        st = _MF()
+        st.dwLength = ctypes.sizeof(_MF)
+        ctypes.windll.kernel32.GlobalMemoryStatusEx(ctypes.byref(st))
+        return int(st.ullAvailPhys // 1048576)
+    except Exception:
+        pass
+    return 0
+
+
+def _weights_gb(model_id: str) -> float:
+    try:
+        mp = Path(_REGISTRY[model_id]["path"])
+        if mp.is_dir():
+            return sum(f.stat().st_size for f in mp.rglob("*.safetensors")
+                       if f.is_file()) / 1e9
+        if mp.is_file():
+            return mp.stat().st_size / 1e9
+    except Exception:
+        pass
+    return 0.0
+
+
+def _plan_device(model_id: str) -> dict:
+    """Decide where a model can run BEFORE loading (fast answer, no hanging).
+
+    - VRAM fits      -> CUDA + profile dtype (unchanged fast path).
+    - VRAM short but RAM fits -> CPU fp32 fallback (works, MUCH slower).
+    - Neither fits   -> HTTPException 503 'will not load' immediately,
+      so clients never wait out a timeout for the impossible.
+    """
+    need_mib = int(_weights_gb(model_id) * 1024 * 1.3) + 1024  # weights + workspace
+    vram_free = 0
+    try:
+        if torch.cuda.is_available():
+            vram_free, _total = torch.cuda.mem_get_info()
+            vram_free = int(vram_free // 1048576)
+    except Exception:
+        pass
+    if need_mib > 0 and vram_free >= need_mib:
+        return {"device": "cuda", "dtype": None, "fit": "vram",
+                "need_mib": need_mib, "vram_free_mib": vram_free}
+    ram_free = _ram_free_mib()
+    if need_mib > 0 and ram_free >= need_mib + 2048:
+        logger.warning("VRAM short for '%s' (need ~%d MiB, free %d MiB) -> CPU "
+                       "fallback from RAM (%d MiB free). This WORKS but is MUCH "
+                       "slower; free VRAM (close LM Studio?) for full speed.",
+                       model_id, need_mib, vram_free, ram_free)
+        return {"device": "cpu", "dtype": "float32", "fit": "ram",
+                "need_mib": need_mib, "vram_free_mib": vram_free,
+                "ram_free_mib": ram_free}
+    raise HTTPException(status_code=503, detail={
+        "error": "will not load",
+        "model": model_id,
+        "reason": "insufficient VRAM and RAM",
+        "need_mib": need_mib,
+        "vram_free_mib": vram_free,
+        "ram_free_mib": ram_free,
+        "hint": "Free VRAM (close other GPU apps) or free RAM, then retry.",
+    })
 
 
 def _resolve_model_id(requested: str | None) -> str:
@@ -910,20 +1005,33 @@ def ensure_model_loaded(requested: str | None) -> str:
                 logger.info("Loading model: %s", model_id)
             unload_current_model()
             _apply_profile(model_id)
+            plan = _plan_device(model_id)
             try:
-                load_model()
-            except Exception:
+                load_model(device=plan["device"], dtype=plan["dtype"])
+            except HTTPException:
+                raise
+            except Exception as e:
                 # Never leave a partially loaded pipeline alive.
                 _inpaint_pipe = None
                 _img2img_pipe = None
                 _pipe = None
                 _model_id = ""
                 _ACTIVE_PROFILE = None
+                _LOAD_DEVICE = None
+                _LOAD_DTYPE = None
                 gc.collect()
                 try:
                     torch.cuda.empty_cache()
                 except Exception:
                     pass
+                if isinstance(e, torch.OutOfMemoryError) or "out of memory" in str(e).lower():
+                    raise HTTPException(status_code=503, detail={
+                        "error": "will not load",
+                        "model": model_id,
+                        "reason": f"CUDA out of memory during load: {str(e)[:200]}",
+                        "hint": "Free VRAM (close other GPU apps) and retry; "
+                                "RAM fallback applies automatically when VRAM is short.",
+                    })
                 raise
             if _pipe is None:
                 raise RuntimeError(f"Loader finished without a pipeline for '{model_id}'")
@@ -936,8 +1044,8 @@ def ensure_model_loaded(requested: str | None) -> str:
             _LOADING["model"] = ""
 
 
-def load_model():
-    global _pipe, _model_id
+def load_model(device: str | None = None, dtype: str | None = None):
+    global _pipe, _model_id, _LOAD_DEVICE, _LOAD_DTYPE
     import diffusers
 
     # Compat (2026-09-22): see _ensure_transformers_compat.
@@ -953,14 +1061,15 @@ def load_model():
     model_path = _args.model
     _model_id = Path(model_path).name
     dtype_map = {"bfloat16": torch.bfloat16, "float16": torch.float16, "float32": torch.float32}
-    torch_dtype = dtype_map.get(_args.dtype, torch.bfloat16)
+    dtype_name = dtype or _args.dtype
+    torch_dtype = dtype_map.get(dtype_name, torch.bfloat16)
     use_offload = _args.cpu_offload
-    target_device = _target_device()
+    target_device = device or _target_device()
     if target_device != "cuda" and use_offload:
         logger.warning("CPU offload requested but %s is the active device; using direct device placement instead", target_device)
         use_offload = False
 
-    logger.info(f"Loading model from {model_path} (dtype={_args.dtype}, offload={use_offload}, device={target_device})...")
+    logger.info(f"Loading model from {model_path} (dtype={dtype_name}, offload={use_offload}, device={target_device})...")
 
     # Ensure HF token is available for gated repos
     _hf_token = os.environ.get("HF_TOKEN") or os.environ.get("HUGGING_FACE_HUB_TOKEN")
@@ -1312,6 +1421,8 @@ def load_model():
             logger.warning(f"Could not disable safety checker: {e}")
 
     logger.info(f"Model loaded: {_model_id}")
+    _LOAD_DEVICE = target_device
+    _LOAD_DTYPE = dtype_name
 
     # Load LoRA weights if specified
     if _args.lora:
@@ -1647,7 +1758,7 @@ def _get_inpaint_pipe():
 
     import diffusers
     model_path = _args.model
-    torch_dtype = DTYPE_MAP.get(_args.dtype, torch.bfloat16)
+    torch_dtype = _active_torch_dtype()
 
     # Check if the main pipeline IS already an inpaint pipeline
     pipe_cls_name = type(_pipe).__name__
@@ -1689,9 +1800,9 @@ def _get_inpaint_pipe():
         'StableDiffusionXLImg2ImgPipeline',
         'StableDiffusionImg2ImgPipeline',
     ]
-    torch_dtype = DTYPE_MAP.get(_args.dtype, torch.bfloat16)
+    torch_dtype = _active_torch_dtype()
     harmonize_gpu = _args.harmonize_gpu
-    target_device = _target_device()
+    target_device = _active_device()
     for name in img2img_names:
         cls = getattr(diffusers, name, None)
         if cls:
@@ -1759,7 +1870,7 @@ def _get_img2img_pipe():
             continue
         try:
             _img2img_pipe = cls.from_pipe(
-                _pipe, torch_dtype=DTYPE_MAP.get(_args.dtype, torch.bfloat16))
+                _pipe, torch_dtype=_active_torch_dtype())
             logger.info(f"Loaded img2img pipeline for edits: {name}")
             return _img2img_pipe
         except Exception as e:
@@ -2358,6 +2469,7 @@ def health():
             "status": "ok",
             "model": _model_id or None,
             "current_model": _model_id or None,
+            "device": _LOAD_DEVICE or None,
             "available_models": sorted(_REGISTRY.keys()),
             "loading": bool(_LOADING["active"]),
             "loading_model": _LOADING["model"] or None,

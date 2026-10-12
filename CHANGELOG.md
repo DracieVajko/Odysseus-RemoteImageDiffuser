@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.5.0 (unreleased)
+- VRAM-aware loading: fits VRAM → CUDA; VRAM short but RAM fits → CPU fp32
+  fallback (slow but works); fits nowhere → immediate 503 `will not load`
+  (no more hanging into client timeouts). OOM during load → same 503.
+- `device` (cuda/cpu) in `/health`; derived pipes follow the active dtype
+
 ## 0.4.0 (unreleased)
 - Everything in English: docs, WebUI, scripts, contract
 - LAN setup alongside Tailscale (`-TailscaleIp` = any IP, LAN firewall example)
