@@ -14,8 +14,10 @@ import base64
 import io
 import json
 import logging
+import os
 import time
 import uuid
+from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import FastAPI, File, Form, UploadFile
@@ -24,6 +26,8 @@ from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from pydantic import BaseModel
 from typing import Optional
 
+from unified.audio_proxy import transcribe_via_service
+from unified.engine import init_diffusion_engine, try_real_inpaint
 from unified.model_manager import ModelManager, ModelLoadingError
 from unified.registry import build_registry
 from unified.upscale import upscale_image_b64
@@ -32,10 +36,23 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("unified_server")
 
 HERE = Path(__file__).resolve().parent
+WHISPER_SERVICE_URL = os.getenv("UNIFIED_WHISPER_URL", "http://127.0.0.1:4444")
 _manager = ModelManager()
 _START_TS = time.time()
 
-app = FastAPI(title="Unified Standalone Server")
+
+@asynccontextmanager
+async def lifespan(application):
+    # Best effort: registry bez váh; reálna inferencia až keď sú torch+váhy.
+    try:
+        if os.getenv("UNIFIED_NO_ENGINE", "") != "1":
+            init_diffusion_engine()
+    except Exception as e:
+        logger.warning(f"engine init skipped: {e}")
+    yield
+
+
+app = FastAPI(title="Unified Standalone Server", lifespan=lifespan)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -268,9 +285,22 @@ def inpaint(req: InpaintRequest):
     if not req.image:
         return JSONResponse(status_code=400, content={"error": "missing image b64"})
     t0 = time.time()
-    # V1: vrátiť vstupný obraz (pipeline inpaint sa napojí keď je váha v RAM);
-    # kontrakt {image, elapsed, request_id} drží, mazanie ľudí funguje cez masku v ďalšom kroku.
-    return {"image": req.image, "elapsed": round(time.time() - t0, 2), "request_id": rid}
+    # Reálna pipeline keď je engine naložený (masks = mazanie ľudí v pozadí),
+    # inak echo vstupu — kontrakt {image, elapsed, request_id} drží vždy.
+    if req.mask:
+        try:
+            real = try_real_inpaint(req.image, req.mask, req.prompt, model_id,
+                                    req.strength, req.steps)
+        except ValueError as e:
+            return JSONResponse(status_code=400, content={"error": str(e)[:200]})
+        except Exception as e:
+            logger.warning(f"real inpaint failed, echo fallback: {str(e)[:160]}")
+            real = None
+        if real:
+            return {"image": real, "elapsed": round(time.time() - t0, 2),
+                    "request_id": rid, "engine": "diffusion"}
+    return {"image": req.image, "elapsed": round(time.time() - t0, 2),
+            "request_id": rid, "engine": "echo"}
 
 
 @app.post("/v1/images/harmonize")
@@ -364,13 +394,25 @@ async def transcriptions(
             t.write(content)
         try:
             text, lang = _transcribe_with_whisper(tmp, wanted, language)
+            engine = "local"
         except Exception as e:
-            logger.warning(f"whisper engine missing, stub: {str(e)[:160]}")
-            text, lang = "[unified stub — nainštaluj faster-whisper + model]", language
+            logger.warning("local whisper missing (%s), proxy %s",
+                             str(e)[:120], WHISPER_SERVICE_URL)
+            proxied = transcribe_via_service(
+                WHISPER_SERVICE_URL, content, up.filename or "audio.wav",
+                wanted, language)
+            if proxied is not None:
+                text, lang = proxied
+                engine = "whisper-service"
+                # nič lokálne nedržíme v RAM → gate hneď uvoľniť pre obrazy
+                _manager.unload("audio-proxied")
+            else:
+                text, lang = "[unified stub — spusti WhisperApi službu alebo nainštaluj faster-whisper]", language
+                engine = "stub"
         if response_format == "text":
             from fastapi.responses import PlainTextResponse
             return PlainTextResponse(text)
-        return {"text": text, "language": lang}
+        return {"text": text, "language": lang, "engine": engine}
     finally:
         try:
             if tmp:
@@ -400,14 +442,10 @@ async def transcribe_alias(file: UploadFile = File(...), language: str = Form(de
 
 @app.get("/webui", response_class=HTMLResponse)
 def webui():
-    p = HERE / "webui.html"
-    if p.exists():
-        html = p.read_text(encoding="utf-8", errors="ignore")
-        # minimálny unified banner (neprepisuje logiku pôvodného UI)
-        banner = ('<div style="padding:8px;background:#111;color:#eee;font:12px sans-serif">'
-                  'Unified: Images + Audio + Upscale na :8101 (legacy audio :4444 shim v README)'
-                  '</div>')
-        return banner + html
+    for name in ("webui_unified.html", "webui.html"):
+        p = HERE / name
+        if p.exists():
+            return p.read_text(encoding="utf-8", errors="ignore")
     return ('<h3>Unified Standalone</h3><ul>'
             '<li>POST /v1/images/generations|edits|inpaint|harmonize|upscale</li>'
             '<li>POST /v1/audio/transcriptions|translations</li></ul>')
