@@ -3,6 +3,7 @@ package eu.odysseus.diffusion
 import io.ktor.http.HttpStatusCode
 import io.ktor.serialization.kotlinx.json.json
 import io.ktor.server.application.Application
+import io.ktor.server.application.call
 import io.ktor.server.application.install
 import io.ktor.server.engine.embeddedServer
 import io.ktor.server.netty.Netty
@@ -17,6 +18,7 @@ import io.ktor.server.routing.post
 import io.ktor.server.routing.routing
 import io.ktor.http.content.PartData
 import io.ktor.http.content.forEachPart
+import io.ktor.utils.io.core.readBytes
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import java.util.UUID
@@ -98,7 +100,7 @@ data class HarmonizeReq(
 data class UpscaleReq(
     val image: String = "",
     val scale: Int = 2,
-    val model: String = "realesrgan-x4v3-ncnn",
+    val model: String = "realesrgan-x4plus-ncnn",
     val request_id: String = "",
 )
 
@@ -167,7 +169,7 @@ class ApiServer(
                         "model" to (st.loadedId ?: ""),
                         "current_model" to (st.loadedId ?: ""),
                         "device" to "vulkan-ncnn",
-                        "available_models" to listOf("lcm-dreamshaper-int8", "whisper-small-q5_0"),
+                        "available_models" to listOf("lcm-dreamshaper-int8", "whisper-small-q5_1"),
                         "loading" to st.loading,
                         "loading_model" to st.loadingModel,
                         "busy" to st.busy,
@@ -188,10 +190,10 @@ class ApiServer(
                                 "guessed" to false,
                             ),
                             mapOf(
-                                "id" to "whisper-small-q5_0",
+                                "id" to "whisper-small-q5_1",
                                 "object" to "model",
                                 "owned_by" to "odysseus-local",
-                                "available" to downloader.isReady("whisper-small-q5_0"),
+                                "available" to downloader.isReady("whisper-small-q5_1"),
                                 "guessed" to false,
                             ),
                         ),
@@ -273,7 +275,7 @@ class ApiServer(
                         }
                         is PartData.FileItem -> if (part.name == "image") {
                             hasImage = true
-                            part.streamProvider().use { it.readBytes() } // TODO(NCNN): dekódovať do pipeline
+                            part.provider().readBytes() // TODO(NCNN): dekódovať do pipeline
                         }
                         else -> {}
                     }
@@ -351,7 +353,7 @@ class ApiServer(
                     return@post
                 }
                 manager.ensure("upscale", req.model)
-                requireModelReady("realesrgan-x4v3-ncnn")
+                requireModelReady("realesrgan-x4plus-ncnn")
                 val rid = req.request_id.ifEmpty { UUID.randomUUID().toString() }
                 // TODO(NCNN): Real-ESRGAN-x4v3 tile processing (Vulkan).
                 call.respond(mapOf("image" to STUB_PNG_B64, "elapsed" to 0.0, "request_id" to rid))
@@ -369,14 +371,14 @@ class ApiServer(
         var filename = ""
         var mime = ""
         var bytes = ByteArray(0)
-        var model = "whisper-small-q5_0"
+        var model = "whisper-small-q5_1"
         var language = "sk"
         call.receiveMultipart().forEachPart { part ->
             when (part) {
                 is PartData.FileItem -> if (part.name == "audio" || part.name == "file") {
                     filename = part.originalFileName ?: "audio"
                     mime = part.contentType?.toString() ?: ""
-                    part.streamProvider().use { bytes = it.readBytes() }
+                    bytes = part.provider().readBytes()
                 }
                 is PartData.FormItem -> when (part.name) {
                     "model" -> model = part.value
@@ -401,12 +403,27 @@ class ApiServer(
             return
         }
         manager.ensure("audio", model) // 503 loading počas prepnutia image→audio
-        requireModelReady("whisper-small-q5_0")
-        @Suppress("UNUSED_VARIABLE")
-        val unused = "$mime|$language|$translation"
-        // TODO(WHISPER): whisper.cpp JNI (small Q5_0 minimum pre SK) +
-        //   ffmpeg-kit Min normalizácia na wav 16 kHz mono pred dekódovaním.
-        call.respond(mapOf("text" to "", "language" to language, "note" to "stub: wire whisper.cpp JNI"))
+        requireModelReady("whisper-small-q5_1")
+
+        val tempDir = downloader.modelsDir()
+        val pcmFloats = AudioDecoder.decodeToPcmFloats(bytes, tempDir)
+        val modelFile = downloader.getModelFile("whisper-small-q5_1")
+            ?: throw ModelWillNotLoadError("whisper-small-q5_1 model file missing", -1, -1)
+
+        val text = WhisperLib.transcribe(
+            modelFile = modelFile,
+            samples = pcmFloats,
+            language = language.ifEmpty { "sk" },
+            translate = translation,
+        )
+
+        call.respond(
+            mapOf(
+                "text" to text,
+                "language" to language,
+                "duration" to (pcmFloats.size / 16000.0),
+            )
+        )
     }
 
     private fun requireModelReady(assetId: String) {

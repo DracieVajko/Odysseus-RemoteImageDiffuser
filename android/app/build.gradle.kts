@@ -42,7 +42,7 @@ android {
     packaging {
         resources {
             // Modely NIE v APK: váhy sa sťahujú cez ModelDownloader do app/files.
-            excludes += setOf("**/*.bin", "**/*.param", "**/*.gguf")
+            excludes += setOf("**/*.bin", "**/*.param", "**/*.gguf", "META-INF/INDEX.LIST", "META-INF/io.netty.versions.properties", "META-INF/DEPENDENCIES")
         }
     }
 }

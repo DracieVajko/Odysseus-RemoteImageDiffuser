@@ -33,3 +33,13 @@ Thumbs.db
 Desktop.ini
 .vscode/
 .idea/
+
+# Android (Studio lokálky + build výstupy, nikdy necommitovať)
+android/local.properties
+android/.gradle/
+android/.idea/
+android/.agentbridge/
+android/build/
+android/app/build/
+android/*/build/
+*.hprof
