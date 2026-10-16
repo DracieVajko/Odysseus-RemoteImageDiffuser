@@ -44,5 +44,6 @@ android/.idea/
 android/.agentbridge/
 android/build/
 android/app/build/
+android/app/.cxx/
 android/*/build/
 *.hprof

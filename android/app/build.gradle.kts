@@ -9,6 +9,8 @@ plugins {
 android {
     namespace = "eu.odysseus.diffusion"
     compileSdk = 34
+    // PIN: NDK r27 (overené so whisper.cpp v1.9.5 + CMake 3.22.1).
+    ndkVersion = "27.3.13750724"
 
     defaultConfig {
         applicationId = "eu.odysseus.diffusion"
