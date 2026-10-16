@@ -8,5 +8,5 @@ def test_webui_has_unified_tabs():
     r = c.get("/webui")
     assert r.status_code == 200
     html = r.text
-    for tab in ("Transcribe", "Upscale", "Inpaint", "Generate"):
+    for tab in ("Transcribe", "Upscale", "Inpaint", "Generate", "Caption"):
         assert tab in html, f"missing tab {tab}"

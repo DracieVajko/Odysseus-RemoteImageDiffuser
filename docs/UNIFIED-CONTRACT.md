@@ -18,6 +18,8 @@ Legacy: staré `WhisperApi :4444/v1/audio/*` ostáva ako shim na `:8101/v1/audio
 | POST | `/v1/images/inpaint` | JSON `{image b64, mask b64, prompt, strength, model, request_id}` | `{image b64, elapsed, request_id}` |
 | POST | `/v1/images/harmonize` | JSON `{image b64, prompt, strength, model, request_id}` | `{image b64, elapsed, request_id}` |
 | POST | `/v1/images/upscale` | JSON `{image b64, scale 2/3/4, model, request_id}` | `{image b64, elapsed, model, scale, request_id}` |
+| POST | `/v1/images/caption` | JSON `{image b64, prompt, max_tokens, request_id}` | `{text, elapsed, engine, request_id}` (V2, SmolVLM-500M) |
+| POST | `/v1/chat/completions` | OpenAI vision subset `{model, messages:[{role, content:str\|[{type:text\|image_url}]}]}` | `{choices:[{message:{content}}]}` (V2, bez váhy 503) |
 | POST | `/v1/audio/transcriptions` | multipart `file|audio + model, device, language` | `{text, language}` alebo `text/plain` |
 | POST | `/v1/audio/translations` | same | `{text}` |
 | GET | `/webui` | — | unified HTML (Generate/Edit-Upscale/Transcribe) |

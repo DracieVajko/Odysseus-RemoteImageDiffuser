@@ -50,6 +50,7 @@ canvas#maskpad { width: 100%; border-radius: 6px; border: 1px solid #444; cursor
 <button id="tabPaint" onclick="showTab('paint')">Inpaint</button>
 <button id="tabUp" onclick="showTab('up')">Upscale</button>
 <button id="tabTr" onclick="showTab('tr')">Transcribe</button>
+<button id="tabCap" onclick="showTab('cap')">Caption (VLM)</button>
 </div>
 <label>Image model</label>
 <select id="model"><option value="">(loading…)</option></select>
@@ -117,6 +118,16 @@ canvas#maskpad { width: 100%; border-radius: 6px; border: 1px solid #444; cursor
 <div id="txtout">transcript appears here…</div>
 </div>
 
+<div id="formCap" style="display:none">
+<label>Image to describe (SmolVLM-500M, PC engine)</label>
+<input type="file" id="capimg" accept="image/*" onchange="previewRef(this,'capprev')">
+<img id="capprev" class="preview" style="display:none">
+<label>Prompt</label>
+<textarea id="prompt4" placeholder="Describe the image in detail."></textarea>
+<button class="go" id="btnCap" onclick="generateCap()">Caption</button>
+<div id="capout">caption appears here…</div>
+</div>
+
 <div id="log"></div>
 </div>
 <div>
@@ -126,7 +137,7 @@ canvas#maskpad { width: 100%; border-radius: 6px; border: 1px solid #444; cursor
 <script>
 let MODELS = [];
 function log(m){ const el=document.getElementById('log'); el.textContent = new Date().toLocaleTimeString()+' '+m+'\n'+el.textContent; }
-const TABS = ['txt','img','paint','up','tr'];
+const TABS = ['txt','img','paint','up','tr','cap'];
 function showTab(t){
   for (const x of TABS) {
     document.getElementById('tab'+x[0].toUpperCase()+x.slice(1)).classList.toggle('active', x===t);
@@ -335,6 +346,24 @@ async function generateTr(){
     document.getElementById('txtout').textContent = '['+(j.language||'?')+' · '+(j.engine||'?')+' · '+secs+'s]\n'+(j.text||'(empty)');
     log('transcribed in '+secs+'s engine='+(j.engine||'?'));
   } catch(e){ log('ERROR: '+e); } finally { btn.disabled=false; btn.textContent='Transcribe'; refresh(); }
+}
+async function generateCap(){
+  const btn = document.getElementById('btnCap');
+  const f = document.getElementById('capimg').files[0];
+  if(!f){ alert('Pick an image'); return; }
+  const body = { image: await fileToB64(f),
+    prompt: document.getElementById('prompt4').value.trim() || 'Describe the image in detail.',
+    request_id: rid() };
+  btn.disabled = true; btn.textContent = 'Captioning… (loads VLM on first use)';
+  const t0 = Date.now();
+  try {
+    const r = await fetch('/v1/images/caption',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+    const j = await r.json();
+    if(!r.ok){ log('ERROR '+r.status+': '+JSON.stringify(j).slice(0,500)); alert('Error '+r.status); return; }
+    const secs = ((Date.now()-t0)/1000).toFixed(1);
+    document.getElementById('capout').textContent = '['+(j.engine||'?')+' · '+secs+'s]\n'+(j.text||'(empty)');
+    log('caption done in '+secs+'s engine='+(j.engine||'?'));
+  } catch(e){ log('ERROR: '+e); } finally { btn.disabled=false; btn.textContent='Caption'; refresh(); }
 }
 refresh();
 try {

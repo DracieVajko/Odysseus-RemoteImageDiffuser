@@ -62,6 +62,17 @@ object ModelCatalog {
             // Balík neobsahuje x4v3/general — pre foto použi vnútorné
             // models/realesrgan-x4plus.param + .bin (33 MB, všeobecné foto x4).
         ),
+        ModelAsset(
+            id = "smolvlm-500m",
+            kind = "vlm",
+            // NEOVERENÉ: žiadny overený SmolVLM TFLite/ONNX build pre Android
+            // (výskum spomína len technológiu, nie URL). Nevymýšľať —
+            // VLM inferencia zatiaľ len PC :8101 (/v1/images/caption,
+            // /v1/chat/completions). Mobil vracia 503 will-not-load.
+            url = "",
+            sha256 = "",
+            sizeMb = 1000,
+        ),
     )
 
     fun forImageModel(registryId: String): ModelAsset =

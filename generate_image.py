@@ -182,6 +182,24 @@ def cmd_transcribe(a):
     print(b.get("text", ""))
 
 
+def cmd_caption(a):
+    def b64(path):
+        from PIL import Image
+        buf = io.BytesIO()
+        Image.open(path).save(buf, format="PNG")
+        return base64.b64encode(buf.getvalue()).decode()
+
+    st, b = req_json("/v1/images/caption",
+                     {"image": b64(a.input), "prompt": a.prompt,
+                      "max_tokens": a.max_tokens},
+                      timeout=900)
+    if st != 200:
+        print(f"Error {st}: {json.dumps(b)[:400]}")
+        sys.exit(1)
+    print(f"[via {b.get('engine', '?')} elapsed={b.get('elapsed', '?')}s]")
+    print(b.get("text", ""))
+
+
 def main():
     ap = argparse.ArgumentParser(description="DiffusionServer CLI")
     ap.add_argument("--server", default="http://127.0.0.1:8101")
@@ -227,12 +245,18 @@ def main():
     p.add_argument("--model", default="small")
     p.add_argument("--language", default="")
 
+    p = sub.add_parser("caption")
+    p.add_argument("--input", required=True)
+    p.add_argument("--prompt", default="Describe the image in detail.")
+    p.add_argument("--max_tokens", type=int, default=256)
+
     a = ap.parse_args()
     global SERVER
     SERVER = a.server.rstrip("/")
     {"health": cmd_health, "models": cmd_models, "doctor": cmd_doctor,
      "txt2img": cmd_txt2img, "img2img": cmd_img2img, "inpaint": cmd_inpaint,
-     "upscale": cmd_upscale, "transcribe": cmd_transcribe}[a.cmd](a)
+     "upscale": cmd_upscale, "transcribe": cmd_transcribe,
+     "caption": cmd_caption}[a.cmd](a)
 
 
 if __name__ == "__main__":

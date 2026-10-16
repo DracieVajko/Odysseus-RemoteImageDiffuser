@@ -31,6 +31,7 @@ from unified.engine import init_diffusion_engine, try_real_inpaint
 from unified.model_manager import ModelManager, ModelLoadingError
 from unified.registry import build_registry
 from unified.upscale import upscale_image_b64
+from unified.vlm import MODEL_ID as VLM_ID, caption_image_b64, EngineMissing, release_vlm
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("unified_server")
@@ -137,6 +138,30 @@ class UpscaleRequest(BaseModel):
     request_id: Optional[str] = ""
 
 
+class CaptionRequest(BaseModel):
+    image: str = ""
+    prompt: Optional[str] = "Describe the image in detail."
+    max_tokens: int = 256
+    model: Optional[str] = ""
+    request_id: Optional[str] = ""
+
+
+def _release_vlm_best_effort():
+    try:
+        release_vlm()
+    except Exception:
+        pass
+
+
+def _release_sd_best_effort():
+    try:
+        import diffusion_server as ds
+        if getattr(ds, "_pipe", None) is not None:
+            ds.unload_current_model()
+    except Exception:
+        pass
+
+
 # ---------- system ----------
 
 @app.get("/")
@@ -238,6 +263,7 @@ def generations(req: GenRequest):
         _manager.ensure("image", model_id)
     except ModelLoadingError as e:
         return _raise_loading(e)
+    _release_vlm_best_effort()
     n = max(1, min(4, req.n or 1))
     data = []
     for _ in range(n):
@@ -266,6 +292,7 @@ async def edits(
         _manager.ensure("image", model_id)
     except ModelLoadingError as e:
         return _raise_loading(e)
+    _release_vlm_best_effort()
     # V1: img2img cez reálnu pipeline ak je, inak placeholder (kontrakt drží tvar)
     await image.read()
     b64 = _try_real_generation(model_id, prompt or "edit", size, quality)
@@ -285,6 +312,7 @@ def inpaint(req: InpaintRequest):
     if not req.image:
         return JSONResponse(status_code=400, content={"error": "missing image b64"})
     t0 = time.time()
+    _release_vlm_best_effort()
     # Reálna pipeline keď je engine naložený (masks = mazanie ľudí v pozadí),
     # inak echo vstupu — kontrakt {image, elapsed, request_id} drží vždy.
     if req.mask:
@@ -331,6 +359,92 @@ def upscale(req: UpscaleRequest):
         return JSONResponse(status_code=400, content={"error": msg})
     out["request_id"] = rid
     return out
+
+
+# ---------- vision (V2) ----------
+
+@app.post("/v1/images/caption")
+def caption(req: CaptionRequest):
+    rid = req.request_id or f"req-{uuid.uuid4().hex[:8]}"
+    try:
+        _manager.ensure("vlm", VLM_ID)
+    except ModelLoadingError as e:
+        return _raise_loading(e)
+    if not req.image:
+        return JSONResponse(status_code=400, content={"error": "missing image b64"})
+    _release_sd_best_effort()
+    try:
+        out = caption_image_b64(req.image, req.prompt or "Describe the image in detail.",
+                                req.max_tokens or 256)
+    except ValueError as e:
+        return JSONResponse(status_code=400, content={"error": str(e)[:200]})
+    except EngineMissing as e:
+        return JSONResponse(status_code=503,
+                            content={"error": "will not load", "detail": str(e)[:200]})
+    out["request_id"] = rid
+    return out
+
+
+def _chat_vision_parts(messages):
+    """Z OpenAI messages vytiahni (text, image_b64) poslednej user správy."""
+    text, image = "", ""
+    items = messages if isinstance(messages, list) else []
+    for m in reversed(items):
+        if not isinstance(m, dict) or m.get("role") != "user":
+            continue
+        c = m.get("content", "")
+        if isinstance(c, str):
+            if c.strip():
+                text = c
+                break
+        elif isinstance(c, list):
+            for part in c:
+                if not isinstance(part, dict):
+                    continue
+                if part.get("type") == "text" and not text:
+                    text = part.get("text", "")
+                elif part.get("type") == "image_url" and not image:
+                    u = (part.get("image_url") or {}).get("url", "")
+                    if u.startswith("data:image/") and ";base64," in u:
+                        image = u.split(";base64,", 1)[1]
+            if text or image:
+                break
+    return text, image
+
+
+@app.post("/v1/chat/completions")
+def chat_completions(body: dict):
+    model = (body.get("model") or VLM_ID) if isinstance(body, dict) else VLM_ID
+    messages = body.get("messages", []) if isinstance(body, dict) else []
+    max_tokens = body.get("max_tokens", 256) if isinstance(body, dict) else 256
+    try:
+        _manager.ensure("vlm", VLM_ID)
+    except ModelLoadingError as e:
+        return _raise_loading(e)
+    text, image = _chat_vision_parts(messages)
+    if not image:
+        return JSONResponse(status_code=400, content={
+            "error": "missing image: V1 podporuje len vision správy (content s image_url data:base64)"})
+    _release_sd_best_effort()
+    try:
+        out = caption_image_b64(image, text or "Describe the image in detail.",
+                                max_tokens or 256)
+    except ValueError as e:
+        return JSONResponse(status_code=400, content={"error": str(e)[:200]})
+    except EngineMissing as e:
+        return JSONResponse(status_code=503,
+                            content={"error": "will not load", "detail": str(e)[:200]})
+    return {
+        "id": f"chatcmpl-{uuid.uuid4().hex[:12]}",
+        "object": "chat.completion",
+        "created": int(time.time()),
+        "model": model,
+        "choices": [{
+            "index": 0,
+            "message": {"role": "assistant", "content": out["text"]},
+            "finish_reason": "stop",
+        }],
+    }
 
 
 # ---------- audio ----------

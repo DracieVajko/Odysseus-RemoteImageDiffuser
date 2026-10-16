@@ -46,7 +46,18 @@ PRESETS = {
     "sd15": ["DreamShaper_8", "AbsoluteReality_1.8"],
     "sdxl": ["AnimagineXL_3.1", "JuggernautXL_v9"],
     "upscale": ["RealESRGAN_x4v3"],
+    "vlm": ["SmolVLM_500M"],
 }
+
+# VLM (V2): HuggingFaceTB SmolVLM-500M-Instruct (~1 GB, Apache-2.0).
+# Snapshot ako SD modely; server používa transformers AutoModelForImageTextToText.
+VLM_TASKS = [
+    {"id": "SmolVLM_500M", "kind": "snapshot", "repo": "HuggingFaceTB/SmolVLM-500M-Instruct",
+     "target": "SmolVLM_500M", "min_gb": 0.8,
+     "allow": ["*.safetensors", "*.json", "tokenizer/*", "preprocessor_config.json",
+               "*.model", "*.txt", "chat_template.jinja"],
+     "license": "Apache-2.0 (see repo card)"},
+]
 
 # Upscale váhy (malé, sťahujú sa aj do mobilného balíčka cez ModelDownloader).
 # RealESRGAN_x4plus.pth: x4, všeobecné foto (BSD-3-Clause, xinntao/Real-ESRGAN,
@@ -182,7 +193,7 @@ def main():
 
     if args.list:
         print("Models:", flush=True)
-        for t in TASKS + UPSCALE_TASKS:
+        for t in TASKS + UPSCALE_TASKS + VLM_TASKS:
             print(f"  {t['id']}: {t.get('repo', 'civitai')} [{t.get('license', '')}]", flush=True)
         print("Presets:", flush=True)
         for name, ids in PRESETS.items():
@@ -201,7 +212,7 @@ def main():
         return
 
     ids = args.models or PRESETS[args.preset]
-    all_tasks = TASKS + UPSCALE_TASKS
+    all_tasks = TASKS + UPSCALE_TASKS + VLM_TASKS
     unknown = [i for i in ids if i not in {t["id"] for t in all_tasks}]
     if unknown:
         print(f"Unknown model IDs: {', '.join(unknown)}", flush=True)

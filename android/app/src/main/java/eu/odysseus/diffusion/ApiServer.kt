@@ -106,6 +106,15 @@ data class UpscaleReq(
     val request_id: String = "",
 )
 
+@Serializable
+data class CaptionReq(
+    val image: String = "",
+    val prompt: String = "Describe the image in detail.",
+    val max_tokens: Int = 256,
+    val model: String = "",
+    val request_id: String = "",
+)
+
 enum class JobState { RUNNING, LOADING, DONE, ERROR, UNKNOWN }
 
 data class JobProgress(
@@ -359,6 +368,19 @@ class ApiServer(
                 val rid = req.request_id.ifEmpty { UUID.randomUUID().toString() }
                 // TODO(NCNN): Real-ESRGAN-x4v3 tile processing (Vulkan).
                 call.respond(mapOf("image" to STUB_PNG_B64, "elapsed" to 0.0, "request_id" to rid))
+            }
+            post("/v1/images/caption") {
+                val req = call.receive<CaptionReq>()
+                if (req.image.isEmpty()) {
+                    call.respond(HttpStatusCode.BadRequest, mapOf("error" to "image required (base64)"))
+                    return@post
+                }
+                // V2 mobile: SmolVLM build neoverený (viď ModelCatalog) → 503, nie stub text.
+                throw ModelWillNotLoadError("vlm smolvlm-500m not available on device (PC :8101 /v1/images/caption works)")
+            }
+            post("/v1/chat/completions") {
+                // V2 mobile: vision chat ide cez PC; tvar chyby ako /v1/images/caption.
+                throw ModelWillNotLoadError("vlm smolvlm-500m not available on device (PC :8101 /v1/chat/completions works)")
             }
             post("/v1/audio/transcriptions") {
                 handleAudio(call, translation = false)
