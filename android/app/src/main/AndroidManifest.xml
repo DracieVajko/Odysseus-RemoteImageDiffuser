@@ -15,6 +15,7 @@
     <application
         android:label="Odysseus Diffusion"
         android:supportsRtl="true"
+        android:theme="@style/Theme.Odysseus"
         android:usesCleartextTraffic="true">
         <activity
             android:name=".MainActivity"
