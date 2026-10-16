@@ -36,6 +36,15 @@ def find_vlm_dir(dirs=None):
 _cache = {}
 
 
+def _have_torch_stack() -> bool:
+    try:
+        import torch  # noqa: F401
+        import transformers  # noqa: F401
+        return True
+    except Exception:
+        return False
+
+
 def _load(model_dir: Path):
     import torch
     from transformers import AutoProcessor, AutoModelForImageTextToText
@@ -84,16 +93,18 @@ def caption_image_b64(image_b64: str, prompt: str = "Describe the image in detai
     model_dir = find_vlm_dir(search_dirs)
     if model_dir is None:
         raise EngineMissing(f"VLM weights missing ({MODEL_ID}); run download_models.py --preset vlm")
+    if not _have_torch_stack():
+        raise EngineMissing("torch/transformers not installed in this python env")
     if img.width > MAX_SIDE or img.height > MAX_SIDE:
         img.thumbnail((MAX_SIDE, MAX_SIDE), Image.LANCZOS)
     t0 = time.time()
     proc, model, device = _load(model_dir)
     import torch
-    messages = [[{"role": "user", "content": [
-        {"type": "image"}, {"type": "text", "text": prompt or "Describe the image."}]}]]
-    inputs = proc.apply_chat_template(
-        messages, add_generation_prompt=True, tokenize=True,
-        return_dict=True, return_tensors="pt").to(device)
+    messages = [{"role": "user", "content": [
+        {"type": "image"}, {"type": "text", "text": prompt or "Describe the image."}]}]
+    # Šablóna vyrobí text s <image> tokenom; obraz sa pasuje zvlášť (nie return_dict).
+    text_in = proc.apply_chat_template(messages, add_generation_prompt=True)
+    inputs = proc(text=text_in, images=[img], return_tensors="pt").to(device)
     with torch.no_grad():
         out = model.generate(**inputs, max_new_tokens=max(16, min(512, max_tokens)))
     gen = out[0][inputs["input_ids"].shape[1]:]

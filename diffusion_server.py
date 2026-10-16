@@ -666,6 +666,8 @@ def _discover_models() -> dict:
     stays the source of truth, confirm the profile there.
     """
     found = {}
+    # Adresáre, ktoré nie sú difúzne váhy (VLM, upscale) — auto-discovery ich ignoruje.
+    NON_DIFFUSION_DIRS = {"SmolVLM_500M", "RealESRGAN_x4v3", "Vision", "Upscale", "VLM"}
     try:
         models_dir = Path(__file__).resolve().parent / "models"
         if not models_dir.is_dir():
@@ -679,6 +681,8 @@ def _discover_models() -> dict:
                 continue
         for sub in sorted(models_dir.iterdir()):
             if not sub.is_dir() or sub.name.startswith("."):
+                continue
+            if sub.name in NON_DIFFUSION_DIRS:
                 continue
             has_index = (sub / "model_index.json").exists()
             sfs = sorted(sub.glob("*.safetensors")) + sorted(sub.glob("*.ckpt"))
