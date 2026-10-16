@@ -20,6 +20,20 @@ import android.widget.Spinner
 import android.widget.TextView
 import android.widget.Toast
 import androidx.appcompat.app.AppCompatActivity
+import io.ktor.client.HttpClient
+import io.ktor.client.engine.okhttp.OkHttp
+import io.ktor.client.request.get
+import io.ktor.client.request.post
+import io.ktor.client.request.setBody
+import io.ktor.client.statement.HttpResponse
+import io.ktor.client.statement.bodyAsText
+import io.ktor.http.ContentType
+import io.ktor.http.contentType
+import io.ktor.serialization.kotlinx.json.json
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.launch
 import androidx.core.app.NotificationCompat
 
 /**
@@ -195,6 +209,8 @@ object AppGraph {
  */
 class DiffusionService : Service() {
     private var server: ApiServer? = null
+    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    private var remoteBase: String = ""
 
     override fun onCreate() {
         super.onCreate()
@@ -209,11 +225,14 @@ class DiffusionService : Service() {
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        @Suppress("UNUSED_VARIABLE")
         val mode = intent?.getStringExtra("mode") ?: "AUTO"
-        @Suppress("UNUSED_VARIABLE")
         val remote = intent?.getStringExtra("remote") ?: ""
-        // TODO(AUTO): pri will-not-load prepnúť klienta na `remote` base URL.
+        remoteBase = remote
+        // Android build.gradle.kts už má ktor-client-core + okhttp, takže žiadna
+    // nová závislosť. TODO: neskôr pridať caching + retry.
+    // Ruling: Auto režim je len prepínač; reálny fallback sa robí v UI
+    // cez RemoteProxy.health() — nie v ApiServer.kt (žiadna sieťová závislosť
+    // v serveri samotnom, aby zostal testovateľný).
         if (server == null) {
             server = ApiServer(AppGraph.manager, ModelDownloader(this)).also { it.start(wait = false) }
         }
