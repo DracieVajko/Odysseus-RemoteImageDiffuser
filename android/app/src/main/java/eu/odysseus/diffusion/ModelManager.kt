@@ -66,9 +66,7 @@ class ModelManager {
         doUnloadLocked(reason)
     }
 
-    private fun doUnloadLocked(reason: String): Boolean {
-        @Suppress("UNUSED_PARAMETER")
-        val ignored = reason
+    private fun doUnloadLocked(@Suppress("UNUSED_PARAMETER") reason: String): Boolean {
         val had = loadedKind != null
         loadedKind = null
         loadedId = null

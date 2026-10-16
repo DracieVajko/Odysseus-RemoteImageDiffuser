@@ -31,8 +31,10 @@ import java.util.concurrent.ConcurrentHashMap
 // Rozdiely (mobile V1, research verdikty):
 // - quality→steps sa capuje na 4..8 (LCM režim); viac = OOM na Adreno/Mali.
 // - backend NCNN + Vulkan (nie NNAPI).
-// - inferencia je STUB: bez stiahnutých váh (ModelDownloader.isReady == false)
-//   vracia 503 will-not-load — hooky pre JNI sú označené TODO(NCNN).
+// Stav inferencie (mobile V1):
+// - audio: REÁLNE (AudioDecoder → WhisperLib JNI → libwhisper.so z CMake buildu).
+// - image/upscale: STUB (1×1 PNG) + 503 will-not-load bez váh; NCNN hooky TODO(NCNN).
+//   Dôvod: overený NCNN zdroj pre LCM neexistuje (pozri ModelCatalog).
 // ---------------------------------------------------------------------------
 
 const val SERVER_PORT = 8101
@@ -369,7 +371,6 @@ class ApiServer(
 
     private suspend fun handleAudio(call: io.ktor.server.application.ApplicationCall, translation: Boolean) {
         var filename = ""
-        var mime = ""
         var bytes = ByteArray(0)
         var model = "whisper-small-q5_1"
         var language = "sk"
@@ -377,7 +378,6 @@ class ApiServer(
             when (part) {
                 is PartData.FileItem -> if (part.name == "audio" || part.name == "file") {
                     filename = part.originalFileName ?: "audio"
-                    mime = part.contentType?.toString() ?: ""
                     bytes = part.provider().readBytes()
                 }
                 is PartData.FormItem -> when (part.name) {

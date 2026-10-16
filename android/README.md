@@ -8,11 +8,11 @@ Base: `http://<phone>:8101`, žiadna autentifikácia na LAN.
 
 | Rozhodnutie | Dôvod |
 |---|---|
-| Image model: **LCM-Dreamshaper INT8 (NCNN/Vulkan)** = hlavný kandidát | Jediný SD1.5 + LCM combo, ktorý reálne beží na mobile v RAM limite |
+| Image model: **LCM-Dreamshaper INT8 (NCNN/Vulkan)** = hlavný kandidát — **zdroj ZATIAĽ NEOVERENÝ** | Jediný SD1.5 + LCM combo, ktorý reálne beží na mobile v RAM limite; `ncnn/lcm-...` repo neexistuje (404), URL sa doplní až s dôkazom |
 | Steps cap **4–8** na mobile (LCM režim) | Viac steps = OOM + minúty na Adreno/Mali; server capuje |
 | Backend **NCNN + Vulkan**, NIE NNAPI | NNAPI je deprecated / nekonzistentné na SD operátoroch |
-| Audio model: **whisper small Q5_0 minimum pre SK** (whisper.cpp JNI) | tiny/base majú nepoužiteľné WER pre slovenčinu |
-| ffmpeg-kit **Min (LGPL) only**, NIE Full/GPL | Full/GPL sťahuje x264/x265 → licenčný problém v APK |
+| Audio model: **whisper small q5_1 minimum pre SK** (whisper.cpp JNI, PIN v `ModelCatalog`) | tiny/base majú nepoužiteľné WER pre slovenčinu; q5_0 pre small neexistuje |
+| ffmpeg-kit: **VYRADENÝ** (ruling 2026-10-16) | Min artefakty stiahnuté z Central (404), JitPack 401; dekódovanie rieši `AudioDecoder` (MediaCodec), nulové licenčné riziko |
 | SD-Turbo: nekomerčná licencia — NIE default | Len ako opt-in experiment |
 | SSD-1B / SDXL / PaliGemma-3B / SmolVLM / Moondream2: **PC-only / až V2** | Nezmestia sa do ~3–4 GB mobilného budgetu |
 
@@ -47,16 +47,34 @@ android/
   README.md                   # tento súbor
 ```
 
-## Build (až na stroji s Android SDK)
+## Build (overené lokálne: BUILD SUCCESSFUL, 35 taskov)
 
-```bash
+```powershell
 cd android
-./gradlew :app:assembleDebug
+.\gradlew.bat :app:assembleDebug
 adb install app/build/outputs/apk/debug/app-debug.apk
 ```
 
-Bez Android SDK / emulatora sa build neoveruje — kompatibilitu overuje
-`contract-compat.md` (curl tvary proti bežiacemu telefónu).
+Gradle wrapper je PINnutý na 8.10.2 (AGP 8.5.2 nezvláda Gradle 9.x).
+Dôležité: **Gradle JDK musí byť 17** (Android Studio → Settings → Build Tools
+→ Gradle → Gradle JDK). S JDK 25 padá `:app:compileDebugKotlin`
+(`IllegalArgumentException: 25.0.3` v Kotlin daemone). APK ~24 MB, bez modelov.
+
+## Natívny JNI build (whisper.cpp, arm64-v8a)
+
+```powershell
+cd android
+powershell -ExecutionPolicy Bypass -File fetch_third_party.ps1  # whisper.cpp v1.9.5
+# + NDK r27 a CMake 3.22.1 cez SDK Manager (ndkVersion PIN v app/build.gradle.kts)
+.\gradlew.bat :app:assembleDebug   # postaví aj libwhisper.so do APK
+```
+
+`app/src/main/cpp/`: `whisper_jni.cpp` (tenký most nad stabilným C API —
+init_from_file/full/segments/free) + `CMakeLists.txt` (whisper.cpp ako
+statická lib, výstup `libwhisper.so`). CMake sa zapojí **len keď je NDK**
+(`SDK/ndk/<ver>` alebo `ANDROID_NDK_HOME`), inak čistý Kotlin build
+s varovaním — `WhisperLib` vtedy ide stub cestou. Pre plný audio build
+nainštaluj **NDK r27 + CMake 3.22.1** (SDK Manager) a prebuilduj.
 
 ## Režimy (Local / Remote / Auto)
 

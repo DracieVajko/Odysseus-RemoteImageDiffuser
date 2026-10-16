@@ -28,6 +28,9 @@ output/
 # Local machine config (copy models.json.example -> models.json and adjust)
 models.json
 
+# C++ third-party zdroje (klonuje fetch skript, nie sú v gite)
+android/app/src/main/cpp/third_party/
+
 # OS / editors
 Thumbs.db
 Desktop.ini

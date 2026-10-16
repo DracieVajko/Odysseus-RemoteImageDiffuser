@@ -1,3 +1,6 @@
+import java.io.File
+import java.util.Properties
+
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
@@ -44,7 +47,38 @@ android {
             // Modely NIE v APK: váhy sa sťahujú cez ModelDownloader do app/files.
             excludes += setOf("**/*.bin", "**/*.param", "**/*.gguf", "META-INF/INDEX.LIST", "META-INF/io.netty.versions.properties", "META-INF/DEPENDENCIES")
         }
+        // libwhisper.so sa balí z CMake buildu nižšie (arm64-v8a only).
     }
+
+    // Natívny build len s NDK — bez neho čistý Kotlin build (WhisperLib stub).
+    // Dôvod: NDK (~1 GB) nemá každý; povinný CMake by blokoval aj Ktor vývoj.
+    val ndkPresent = findNdkDir() != null
+    if (ndkPresent) {
+        externalNativeBuild {
+            cmake {
+                path = file("src/main/cpp/CMakeLists.txt")
+                version = "3.22.1"
+            }
+        }
+    } else {
+        logger.warn("odysseus: NDK nenájdené → Kotlin-only build (libwhisper.so nebude v APK, audio ide stub cestou)")
+    }
+}
+
+// Hľadá NDK v ANDROID_NDK_HOME, SDK/ndk/<ver> (sdk.dir z local.properties
+// alebo ANDROID_HOME/ANDROID_SDK_ROOT). Vracia dir verzie alebo null.
+fun findNdkDir(): File? {
+    val explicit = System.getenv("ANDROID_NDK_HOME")?.let(::file)
+    if (explicit != null && explicit.isDirectory) return explicit
+    val props = Properties()
+    rootProject.file("local.properties").takeIf { it.exists() }?.inputStream()?.use { props.load(it) }
+    val sdkRoot = (props.getProperty("sdk.dir") as String?)
+        ?.let(::file)
+        ?: System.getenv("ANDROID_HOME")?.let(::file)
+        ?: System.getenv("ANDROID_SDK_ROOT")?.let(::file)
+    val ndkRoot = sdkRoot?.resolve("ndk") ?: return null
+    return ndkRoot.listFiles()?.firstOrNull { it.isDirectory }?.takeIf { it.resolve("build/cmake/android.toolchain.cmake").exists() }
+        ?: ndkRoot.listFiles()?.firstOrNull { it.isDirectory }
 }
 
 dependencies {
@@ -63,11 +97,13 @@ dependencies {
     implementation("com.google.android.material:material:1.12.0")
     implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.8.3")
 
-    // Audio/video normalizácia: VÝHRADNE Min (LGPL). Full/GPL (x264/x265)
-    // by vniesol GPL do APK — zakázané.
-    // TODO(PIN): po overení LGPL-only artefaktu odkomentovať presnú verziu:
-    // implementation("com.arthenica:ffmpeg-kit-min:6.0-2")
+    // Audio dekódovanie: Android MediaCodec (AudioDecoder.kt) — BEZ ffmpeg.
+    // Ruling 2026-10-16: com.arthenica:ffmpeg-kit-min artefakty sú stiahnuté
+    // z MavenCentral (404 aj na .pom, index je zastaraný) a JitPack vracia 401,
+    // takže žiadny overiteľný Min/LGPL artefakt neexistuje. MediaCodec pokrýva
+    // všetky kontraktové formáty (mp3/wav/m4a/webm/mp4/ogg/flac) s nulovým
+    // licenčným rizikom; ffmpeg-kit sa preto vedome nezaraďuje.
 
-    // NCNN Vulkan (.so) + whisper.cpp JNI sa linkujú cez jniLibs, nie z Mavenu.
-    // TODO(PIN): cmake externalNativeBuild po dodaní prebuilt .so.
+    // whisper.cpp sa stavia zo zdrojov cez CMake nižšie (src/main/cpp) —
+    // žiadne prebuilt .so, žiadny Maven. NCNN Vulkan príde rovnakou cestou (V2).
 }
