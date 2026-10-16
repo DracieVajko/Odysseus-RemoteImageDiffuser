@@ -39,6 +39,8 @@ def init_diffusion_engine() -> bool:
                 attention_slicing=True, vae_slicing=True, cpu_offload=False,
                 harmonize_gpu=None, negative_prompt="", single_file_config="",
                 disable_safety_checker=True, performance="auto",
+                lora=None, lora_scale=1.0, host="127.0.0.1", port=8101,
+                allowed_host=[], allowed_origin="",
             )
         ds._init_lazy()
         _inited = True

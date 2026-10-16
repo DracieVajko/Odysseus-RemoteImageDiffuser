@@ -45,7 +45,19 @@ PRESETS = {
     "odysseus-default": [t["id"] for t in TASKS],
     "sd15": ["DreamShaper_8", "AbsoluteReality_1.8"],
     "sdxl": ["AnimagineXL_3.1", "JuggernautXL_v9"],
+    "upscale": ["RealESRGAN_x4v3"],
 }
+
+# Upscale váhy (malé, sťahujú sa aj do mobilného balíčka cez ModelDownloader).
+# RealESRGAN_x4plus.pth: x4, všeobecné foto (BSD-3-Clause, xinntao/Real-ESRGAN,
+# stabilný GitHub release asset — na HF nie je oficiálne repo s touto váhou).
+UPSCALE_TASKS = [
+    {"id": "RealESRGAN_x4v3", "kind": "url",
+     "url": "https://github.com/xinntao/Real-ESRGAN/releases/download/v0.1.0/RealESRGAN_x4plus.pth",
+     "file": "RealESRGAN_x4plus.pth", "target": "RealESRGAN_x4v3",
+     "min_gb": 0.05,
+     "license": "BSD-3-Clause (see repo card)"},
+]
 
 FAILED = []
 
@@ -63,6 +75,35 @@ def run_with_retries(fn, label, tries=5):
 
 def dir_size_gb(path: Path) -> float:
     return sum(f.stat().st_size for f in path.rglob("*") if f.is_file()) / 1e9
+
+
+def download_url(task):
+    import requests
+    target = BASE / task["target"]
+    target.mkdir(parents=True, exist_ok=True)
+    dest = target / task["file"]
+    if dest.exists() and dest.stat().st_size / 1e9 >= task["min_gb"]:
+        print(f"[{task['id']}] exists, skipping ({dest.stat().st_size / 1e9:.2f} GB)", flush=True)
+        return
+    print(f"[{task['id']}] downloading {task['url']} ...", flush=True)
+
+    def _dl():
+        with requests.get(task["url"], stream=True, timeout=120) as r:
+            r.raise_for_status()
+            total = int(r.headers.get("content-length", 0))
+            done = 0
+            tmp = dest.with_suffix(dest.suffix + ".part")
+            with open(tmp, "wb") as f:
+                for chunk in r.iter_content(chunk_size=8 * 1024 * 1024):
+                    if chunk:
+                        f.write(chunk)
+                        done += len(chunk)
+                        if total:
+                            print(f"\r  {done / 1e6:.0f}/{total / 1e6:.0f} MB", end="", flush=True)
+            tmp.rename(dest)
+        print(f"\n[{task['id']}] DONE ({dest.stat().st_size / 1e6:.1f} MB in {dest})", flush=True)
+
+    run_with_retries(_dl, task["id"])
 
 
 def download_hf(task):
@@ -141,7 +182,7 @@ def main():
 
     if args.list:
         print("Models:", flush=True)
-        for t in TASKS:
+        for t in TASKS + UPSCALE_TASKS:
             print(f"  {t['id']}: {t.get('repo', 'civitai')} [{t.get('license', '')}]", flush=True)
         print("Presets:", flush=True)
         for name, ids in PRESETS.items():
@@ -160,16 +201,20 @@ def main():
         return
 
     ids = args.models or PRESETS[args.preset]
-    unknown = [i for i in ids if i not in {t["id"] for t in TASKS}]
+    all_tasks = TASKS + UPSCALE_TASKS
+    unknown = [i for i in ids if i not in {t["id"] for t in all_tasks}]
     if unknown:
         print(f"Unknown model IDs: {', '.join(unknown)}", flush=True)
         sys.exit(2)
     BASE.mkdir(exist_ok=True)
-    for t in TASKS:
+    for t in all_tasks:
         if t["id"] not in ids:
             continue
         try:
-            download_hf(t)
+            if t.get("kind") == "url":
+                download_url(t)
+            else:
+                download_hf(t)
         except Exception as e:  # noqa: BLE001
             print(f"[{t['id']}] FAILED: {e}", flush=True)
             FAILED.append(t["id"])

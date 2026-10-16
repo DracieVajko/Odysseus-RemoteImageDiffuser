@@ -148,6 +148,38 @@ def cmd_inpaint(a):
         print(f"Error {st}: {json.dumps(b)[:400]}")
         sys.exit(1)
     save_b64(b["image"], a.output)
+    print(f"engine={b.get('engine', '?')} elapsed={b.get('elapsed', '?')}s")
+
+
+def cmd_upscale(a):
+    def b64(path):
+        from PIL import Image
+        buf = io.BytesIO()
+        Image.open(path).save(buf, format="PNG")
+        return base64.b64encode(buf.getvalue()).decode()
+
+    st, b = req_json("/v1/images/upscale",
+                     {"image": b64(a.input), "scale": a.scale, "model": a.model})
+    if st != 200:
+        print(f"Error {st}: {json.dumps(b)[:400]}")
+        sys.exit(1)
+    save_b64(b["image"], a.output)
+    print(f"engine={b.get('engine', '?')} elapsed={b.get('elapsed', '?')}s")
+
+
+def cmd_transcribe(a):
+    with open(a.input, "rb") as f:
+        raw = f.read()
+    import os
+    st, b = req_multipart("/v1/audio/transcriptions",
+                          {"model": a.model, "language": a.language or ""},
+                          {"file": (os.path.basename(a.input), raw, "application/octet-stream")},
+                          timeout=900)
+    if st != 200:
+        print(f"Error {st}: {json.dumps(b)[:400]}")
+        sys.exit(1)
+    print(f"[{b.get('language', '?')} via {b.get('engine', '?')}]")
+    print(b.get("text", ""))
 
 
 def main():
@@ -184,11 +216,23 @@ def main():
     p.add_argument("--steps", type=int, default=0)
     p.add_argument("--output", required=True)
 
+    p = sub.add_parser("upscale")
+    p.add_argument("--input", required=True)
+    p.add_argument("--scale", type=int, default=2, choices=[2, 3, 4])
+    p.add_argument("--model", default="RealESRGAN_x4v3")
+    p.add_argument("--output", required=True)
+
+    p = sub.add_parser("transcribe")
+    p.add_argument("--input", required=True)
+    p.add_argument("--model", default="small")
+    p.add_argument("--language", default="")
+
     a = ap.parse_args()
     global SERVER
     SERVER = a.server.rstrip("/")
     {"health": cmd_health, "models": cmd_models, "doctor": cmd_doctor,
-     "txt2img": cmd_txt2img, "img2img": cmd_img2img, "inpaint": cmd_inpaint}[a.cmd](a)
+     "txt2img": cmd_txt2img, "img2img": cmd_img2img, "inpaint": cmd_inpaint,
+     "upscale": cmd_upscale, "transcribe": cmd_transcribe}[a.cmd](a)
 
 
 if __name__ == "__main__":
