@@ -471,6 +471,7 @@ def _transcribe_with_whisper(tmp_path: str, wanted: str, language):
 async def transcriptions(
     file: UploadFile = File(default=None),
     audio: UploadFile = File(default=None),
+    url: str = Form(default=""),
     model: str = Form(default="whisper-1"),
     model_name: str = Form(default="whisper-1"),
     device: str = Form(default=""),
@@ -478,8 +479,25 @@ async def transcriptions(
     response_format: str = Form(default="json"),
 ):
     up = file or audio
-    if up is None:
-        return JSONResponse(status_code=400, content={"error": "missing file"})
+    url = (url or "").strip()
+    if url:
+        if up is not None:
+            return JSONResponse(status_code=400, content={"error": "send either file or url, not both"})
+        try:
+            from unified.ytdlp import download_audio, YtDlpMissing, DownloadFailed
+            tmp_wav = download_audio(url)
+        except YtDlpMissing as e:
+            return JSONResponse(status_code=503, content={"error": "yt-dlp missing",
+                                                         "detail": str(e)[:200]})
+        except DownloadFailed as e:
+            return JSONResponse(status_code=400, content={"error": "download failed",
+                                                         "detail": str(e)[:200]})
+        content = Path(tmp_wav).read_bytes()
+        filename = Path(tmp_wav).name
+        suffix = ".wav"
+        up = None
+    if up is None and not url:
+        return JSONResponse(status_code=400, content={"error": "missing file or url"})
     raw_model = (model or "").strip() or (model_name or "").strip() or "whisper-1"
     wanted = "small" if raw_model == "whisper-1" else raw_model
     if wanted not in ALLOWED_WHISPER:
@@ -491,7 +509,7 @@ async def transcriptions(
     suffix = os.path.splitext(up.filename or "")[1].lower() or ".wav"
     if suffix not in ALLOWED_AUDIO_EXT:
         return JSONResponse(status_code=415, content={"error": f"Unsupported audio format: {suffix}"})
-    content = await up.read()
+    content = await up.read() if up is not None else content
     if not content:
         return JSONResponse(status_code=400, content={"error": "Empty file uploaded"})
     if len(content) > MAX_FILE_SIZE:
