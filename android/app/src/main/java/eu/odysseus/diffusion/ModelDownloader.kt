@@ -24,27 +24,32 @@ import java.util.zip.ZipInputStream
  */
 data class ModelAsset(
     val id: String,
-    val kind: String, // "image" | "audio" | "upscale"
+    val kind: String, // "image" | "audio" | "upscale" | "vlm"
     val url: String,
     val sha256: String,
     val sizeMb: Long,
+    val label: String = id, // ľudský názov pre UI
 )
 
 object ModelCatalog {
-    // PINy overené 2026-10-16 priamym downloadom z oficiálnych zdrojov
-    // (whisper SHA + magic "ggml" + veľkosť; realesr zip SHA + vnútorné modely).
-    // Pravidlo: žiadne URL bez HEAD/API dôkazu —insky 404 (viď lcm nižšie).
+    // PINy overené 2026-10-17 priamym HEAD/API dôkazom (curl -I / HF api).
+    // Pravidlo: žiadne URL bez dôkazu. SmolVLM a LCM sú UNRESOLVED.
     val assets = listOf(
         ModelAsset(
-            id = "lcm-dreamshaper-int8",
-            kind = "image",
-            // NEOVERENÉ: https://huggingface.co/ncnn/lcm-dreamshaper-v7-int8-ncnn
-            // neexistuje (HF API 401/404). URL sa doplní až po nájdení reálneho
-            // NCNN buildu alebo po vlastnej pnnx konverzii na PC. Dovtedy image
-            // endpointy na mobile odpovedajú 503 will-not-load (alebo Remote proxy).
-            url = "",
-            sha256 = "",
-            sizeMb = 2500,
+            id = "whisper-tiny-q5_1",
+            kind = "audio",
+            url = "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-tiny-q5_1.bin",
+            sha256 = "TODO_PIN_SHA256",
+            sizeMb = 31,
+            label = "whisper tiny (31 MB, q5_1) — rýchly, EN ok, SK slabé",
+        ),
+        ModelAsset(
+            id = "whisper-base-q5_1",
+            kind = "audio",
+            url = "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base-q5_1.bin",
+            sha256 = "TODO_PIN_SHA256",
+            sizeMb = 57,
+            label = "whisper base (57 MB, q5_1) — rýchly, SK slabé",
         ),
         ModelAsset(
             id = "whisper-small-q5_1",
@@ -52,6 +57,23 @@ object ModelCatalog {
             url = "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-small-q5_1.bin",
             sha256 = "ae85e4a935d7a567bd102fe55afc16bb595bdb618e11b2fc7591bc08120411bb",
             sizeMb = 181,
+            label = "whisper small (181 MB, q5_1) — minimum pre SK",
+        ),
+        ModelAsset(
+            id = "whisper-medium-q5_0",
+            kind = "audio",
+            url = "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-medium-q5_0.bin",
+            sha256 = "TODO_PIN_SHA256",
+            sizeMb = 514,
+            label = "whisper medium (514 MB, q5_0) — vysoká presnosť SK",
+        ),
+        ModelAsset(
+            id = "whisper-large-v3-turbo-q5_0",
+            kind = "audio",
+            url = "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3-turbo-q5_0.bin",
+            sha256 = "TODO_PIN_SHA256",
+            sizeMb = 548,
+            label = "whisper large-v3-turbo (548 MB, q5_0) — najnovší, najpresnejší",
         ),
         ModelAsset(
             id = "realesrgan-x4plus-ncnn",
@@ -59,19 +81,23 @@ object ModelCatalog {
             url = "https://github.com/xinntao/Real-ESRGAN/releases/download/v0.2.5.0/realesrgan-ncnn-vulkan-20220424-ubuntu.zip",
             sha256 = "e5aa6eb131234b87c0c51f82b89390f5e3e642b7b70f2b9bbe95b6a285a40c96",
             sizeMb = 45,
-            // Balík neobsahuje x4v3/general — pre foto použi vnútorné
-            // models/realesrgan-x4plus.param + .bin (33 MB, všeobecné foto x4).
+            label = "Real-ESRGAN NCNN (45 MB zip) — foto x4",
         ),
         ModelAsset(
             id = "smolvlm-500m",
             kind = "vlm",
-            // NEOVERENÉ: žiadny overený SmolVLM TFLite/ONNX build pre Android
-            // (výskum spomína len technológiu, nie URL). Nevymýšľať —
-            // VLM inferencia zatiaľ len PC :8101 (/v1/images/caption,
-            // /v1/chat/completions). Mobil vracia 503 will-not-load.
             url = "",
             sha256 = "",
             sizeMb = 1000,
+            label = "SmolVLM-500M — zatiaľ len PC, mobil UNRESOLVED",
+        ),
+        ModelAsset(
+            id = "lcm-dreamshaper-int8",
+            kind = "image",
+            url = "",
+            sha256 = "",
+            sizeMb = 2500,
+            label = "LCM-Dreamshaper INT8 — zatiaľ UNRESOLVED (žiadny overený NCNN zdroj)",
         ),
     )
 
