@@ -92,12 +92,12 @@ object ModelCatalog {
             label = "SmolVLM-500M — zatiaľ len PC, mobil UNRESOLVED",
         ),
         ModelAsset(
-            id = "lcm-dreamshaper-int8",
+            id = "lcm-dreamshaper-int8-onnx",
             kind = "image",
-            url = "",
-            sha256 = "",
-            sizeMb = 2500,
-            label = "LCM-Dreamshaper INT8 — zatiaľ UNRESOLVED (žiadny overený NCNN zdroj)",
+            url = "https://huggingface.co/latentdivergence/lcm-dreamshaper-int8-onnx/resolve/main/",
+            sha256 = "TODO_PIN_SHA256",
+            sizeMb = 1615,
+            label = "LCM-Dreamshaper v7 INT8 ONNX (1.6 GB) - onnxruntime, CPU on-device",
         ),
     )
 
