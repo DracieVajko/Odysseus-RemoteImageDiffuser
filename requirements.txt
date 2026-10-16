@@ -59,3 +59,8 @@ typing_extensions==4.16.0
 urllib3==2.8.0
 uvicorn==0.53.0
 zipp==4.1.0
+
+# --- volitelne (nie su v base requirements) ---
+# pip install yt-dlp            # URL vstup pre /v1/audio/transcriptions (YouTube/priame linky)
+# pip install faster-whisper    # lokálny STT bez WhisperApi služby (vyžaduje CTranslate2 CUDA DLLs na Windows)
+# pip install onnxruntime-gpu  # Real-ESRGAN ONNX cesta (zatiaľ Pillow fallback)
