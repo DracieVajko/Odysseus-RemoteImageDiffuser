@@ -39,12 +39,19 @@ TASKS = [
      "file": "Juggernaut-XL_v9_RunDiffusionPhoto_v2.safetensors",
      "target": "JuggernautXL_v9", "min_gb": 5.5,
      "license": "CreativeML Open RAIL-M (see repo card)"},
+    {"id": "SDXL_Turbo", "kind": "file", "repo": "stabilityai/sdxl-turbo",
+     "file": "sd_xl_turbo_1.0_fp16.safetensors",
+     "target": "SDXL_Turbo", "min_gb": 6.0,
+     "single_file_config": "stabilityai/sdxl-turbo",
+     "pipeline": "StableDiffusionXLPipeline",
+     "license": "OpenRAIL++-M (see repo card)"},
 ]
 
 PRESETS = {
     "odysseus-default": [t["id"] for t in TASKS],
     "sd15": ["DreamShaper_8", "AbsoluteReality_1.8"],
     "sdxl": ["AnimagineXL_3.1", "JuggernautXL_v9"],
+    "sdxl-turbo": ["SDXL_Turbo"],
     "upscale": ["RealESRGAN_x4v3"],
     "vlm": ["SmolVLM_500M"],
 }
