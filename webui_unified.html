@@ -51,6 +51,7 @@ canvas#maskpad { width: 100%; border-radius: 6px; border: 1px solid #444; cursor
 <button id="tabUp" onclick="showTab('up')">Upscale</button>
 <button id="tabTr" onclick="showTab('tr')">Transcribe</button>
 <button id="tabCap" onclick="showTab('cap')">Caption (VLM)</button>
+<button id="tabTools" onclick="showTab('tools')">Tools (FFmpeg)</button>
 </div>
 <label>Image model</label>
 <select id="model"><option value="">(loading…)</option></select>
@@ -131,6 +132,24 @@ canvas#maskpad { width: 100%; border-radius: 6px; border: 1px solid #444; cursor
 <div id="capout">caption appears here…</div>
 </div>
 
+<div id="formTools" style="display:none">
+<label>FFmpeg Tools — convert, compress, extract, trim</label>
+<div class="row">
+<div><label>Input file</label><input type="file" id="toolfile" accept="*/*"></div>
+<div><label>Operation</label><select id="toolop">
+<option value="convert-video">Convert Video</option>
+<option value="convert-audio">Convert Audio</option>
+<option value="extract-audio">Extract Audio</option>
+<option value="trim">Trim</option>
+<option value="compress">Compress</option>
+<option value="info">Media Info</option>
+</select></div>
+</div>
+<div id="toolOpts"></div>
+<button class="go" id="btnTool" onclick="runTool()">Run</button>
+<div id="toolout">result appears here…</div>
+</div>
+
 <div id="log"></div>
 </div>
 <div>
@@ -140,7 +159,7 @@ canvas#maskpad { width: 100%; border-radius: 6px; border: 1px solid #444; cursor
 <script>
 let MODELS = [];
 function log(m){ const el=document.getElementById('log'); el.textContent = new Date().toLocaleTimeString()+' '+m+'\n'+el.textContent; }
-const TABS = ['txt','img','paint','up','tr','cap'];
+const TABS = ['txt','img','paint','up','tr','cap','tools'];
 function showTab(t){
   for (const x of TABS) {
     document.getElementById('tab'+x[0].toUpperCase()+x.slice(1)).classList.toggle('active', x===t);
@@ -376,7 +395,37 @@ try {
     const el = document.getElementById(id);
     const saved = localStorage.getItem('u_'+id);
     if (saved !== null && el) el.value = saved;
-    if (el) el.addEventListener('change', () => { localStorage.setItem('u_'+id, el.value); if(id==='model') refresh(); });
+    if (el) el.addEventListener('change', () => { localStorage.setItem('u_'+id, el.value); if(id==='model') async function runTool(){
+  const btn = document.getElementById('btnTool');
+  const f = document.getElementById('toolfile').files[0];
+  if(!f){ alert('Pick a file'); return; }
+  const op = document.getElementById('toolop').value;
+  const fd = new FormData();
+  fd.append('file', f);
+  if(op==='convert-video'){ fd.append('preset','mp4-h264'); }
+  if(op==='convert-audio'){ fd.append('preset','mp3-128'); }
+  if(op==='trim'){ fd.append('start','0'); fd.append('end','10'); }
+  if(op==='compress'){ fd.append('target_size_mb','10'); }
+  btn.disabled = true; btn.textContent = 'Processing...';
+  const t0 = Date.now();
+  try {
+    const r = await fetch('/v1/ffmpeg/'+op,{method:'POST',body:fd});
+    const j = await r.json();
+    if(!r.ok){ log('ERROR '+r.status+': '+JSON.stringify(j).slice(0,500)); alert('Error '+r.status); return; }
+    const secs = ((Date.now()-t0)/1000).toFixed(1);
+    if(j.file){
+      const a = document.createElement('a');
+      a.href = 'data:application/octet-stream;base64,'+j.file;
+      a.download = j.filename||'output';
+      a.click();
+      log('done in '+secs+'s -> '+ (j.filename||'output'));
+    } else if(j.info){
+      document.getElementById('toolout').textContent = JSON.stringify(j.info,null,2);
+      log('info fetched in '+secs+'s');
+    }
+  } catch(e){ log('ERROR: '+e); } finally { btn.disabled=false; btn.textContent='Run'; refresh(); }
+}
+refresh(); });
   }
 } catch(e){}
 </script>
