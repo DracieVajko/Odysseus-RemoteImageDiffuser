@@ -12,6 +12,7 @@ GET /v1/images/progress/{id}, GET /webui, GET / -> /webui
 """
 import base64
 import io
+import tempfile
 import json
 import logging
 import os
@@ -28,6 +29,11 @@ from typing import Optional, Tuple
 
 from unified.audio_proxy import transcribe_via_service
 from unified.audio_splitter import transcribe_with_splitting, get_audio_duration
+from unified.ffmpeg_tools import (
+    VIDEO_PRESETS, AUDIO_PRESETS, RESIZE_PRESETS,
+    convert_video, convert_audio, extract_audio, trim_media, compress_video,
+    get_media_info, get_presets,
+)
 from unified.engine import init_diffusion_engine, try_real_inpaint
 from unified.model_manager import ModelManager, ModelLoadingError
 from unified.registry import build_registry
@@ -603,6 +609,326 @@ def webui():
     return ('<h3>Unified Standalone</h3><ul>'
             '<li>POST /v1/images/generations|edits|inpaint|harmonize|upscale</li>'
             '<li>POST /v1/audio/transcriptions|translations</li></ul>')
+
+
+
+
+# ---------- ffmpeg tools ----------
+
+class ConvertRequest(BaseModel):
+    preset: str = "mp4-h264"
+    resize: Optional[str] = None
+    trim_start: Optional[float] = None
+    trim_end: Optional[float] = None
+    request_id: Optional[str] = ""
+
+
+class AudioConvertRequest(BaseModel):
+    preset: str = "mp3-128"
+    trim_start: Optional[float] = None
+    trim_end: Optional[float] = None
+    request_id: Optional[str] = ""
+
+
+class TrimRequest(BaseModel):
+    start: float = 0.0
+    end: float = 10.0
+    request_id: Optional[str] = ""
+
+
+@app.get("/v1/ffmpeg/presets")
+def ffmpeg_presets():
+    return get_presets()
+
+
+@app.post("/v1/ffmpeg/convert-video")
+async def convert_video_endpoint(
+    file: UploadFile = File(...),
+    preset: str = Form(default="mp4-h264"),
+    resize: str = Form(default=""),
+    trim_start: str = Form(default=""),
+    trim_end: str = Form(default=""),
+    request_id: str = Form(default=""),
+):
+    rid = request_id or "req-" + uuid.uuid4().hex[:8]
+    content = await file.read()
+    if not content:
+        return JSONResponse(status_code=400, content={"error": "Empty file"})
+    if len(content) > MAX_FILE_SIZE:
+        return JSONResponse(status_code=413, content={"error": "File too large"})
+
+    suffix = Path(file.filename or "video.mp4").suffix or ".mp4"
+    tmp = None
+    try:
+        with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as t:
+            tmp = t.name
+            t.write(content)
+
+        ts = float(trim_start) if trim_start.strip() else None
+        te = float(trim_end) if trim_end.strip() else None
+
+        out_path, info = convert_video(
+            Path(tmp), preset=preset,
+            resize=resize.strip() or None,
+            trim_start=ts, trim_end=te
+        )
+
+        out_data = Path(out_path).read_bytes()
+        out_b64 = base64.b64encode(out_data).decode()
+
+        try:
+            Path(out_path).unlink(missing_ok=True)
+        except Exception:
+            pass
+
+        return {
+            "file": out_b64,
+            "filename": Path(out_path).name,
+            "elapsed": 0,
+            "request_id": rid,
+            "info": {
+                "duration": info.get("format", {}).get("duration"),
+                "size": info.get("format", {}).get("size"),
+                "format": info.get("format", {}).get("format_name"),
+            }
+        }
+    except ValueError as e:
+        return JSONResponse(status_code=400, content={"error": str(e)[:200]})
+    except RuntimeError as e:
+        return JSONResponse(status_code=500, content={"error": str(e)[:200]})
+    finally:
+        try:
+            if tmp:
+                Path(tmp).unlink(missing_ok=True)
+        except Exception:
+            pass
+
+
+@app.post("/v1/ffmpeg/convert-audio")
+async def convert_audio_endpoint(
+    file: UploadFile = File(...),
+    preset: str = Form(default="mp3-128"),
+    trim_start: str = Form(default=""),
+    trim_end: str = Form(default=""),
+    request_id: str = Form(default=""),
+):
+    rid = request_id or "req-" + uuid.uuid4().hex[:8]
+    content = await file.read()
+    if not content:
+        return JSONResponse(status_code=400, content={"error": "Empty file"})
+
+    suffix = Path(file.filename or "audio.wav").suffix or ".wav"
+    tmp = None
+    try:
+        with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as t:
+            tmp = t.name
+            t.write(content)
+
+        ts = float(trim_start) if trim_start.strip() else None
+        te = float(trim_end) if trim_end.strip() else None
+
+        out_path, info = convert_audio(
+            Path(tmp), preset=preset,
+            trim_start=ts, trim_end=te
+        )
+
+        out_data = Path(out_path).read_bytes()
+        out_b64 = base64.b64encode(out_data).decode()
+
+        try:
+            Path(out_path).unlink(missing_ok=True)
+        except Exception:
+            pass
+
+        return {
+            "file": out_b64,
+            "filename": Path(out_path).name,
+            "request_id": rid,
+            "info": {
+                "duration": info.get("format", {}).get("duration"),
+                "size": info.get("format", {}).get("size"),
+                "format": info.get("format", {}).get("format_name"),
+            }
+        }
+    except ValueError as e:
+        return JSONResponse(status_code=400, content={"error": str(e)[:200]})
+    except RuntimeError as e:
+        return JSONResponse(status_code=500, content={"error": str(e)[:200]})
+    finally:
+        try:
+            if tmp:
+                Path(tmp).unlink(missing_ok=True)
+        except Exception:
+            pass
+
+
+@app.post("/v1/ffmpeg/extract-audio")
+async def extract_audio_endpoint(
+    file: UploadFile = File(...),
+    format: str = Form(default="wav"),
+    request_id: str = Form(default=""),
+):
+    rid = request_id or "req-" + uuid.uuid4().hex[:8]
+    content = await file.read()
+    if not content:
+        return JSONResponse(status_code=400, content={"error": "Empty file"})
+
+    suffix = Path(file.filename or "video.mp4").suffix or ".mp4"
+    tmp = None
+    try:
+        with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as t:
+            tmp = t.name
+            t.write(content)
+
+        out_path, info = extract_audio(Path(tmp), audio_format=format)
+
+        out_data = Path(out_path).read_bytes()
+        out_b64 = base64.b64encode(out_data).decode()
+
+        try:
+            Path(out_path).unlink(missing_ok=True)
+        except Exception:
+            pass
+
+        return {
+            "file": out_b64,
+            "filename": Path(out_path).name,
+            "request_id": rid,
+            "info": {
+                "duration": info.get("format", {}).get("duration"),
+                "size": info.get("format", {}).get("size"),
+            }
+        }
+    except RuntimeError as e:
+        return JSONResponse(status_code=500, content={"error": str(e)[:200]})
+    finally:
+        try:
+            if tmp:
+                Path(tmp).unlink(missing_ok=True)
+        except Exception:
+            pass
+
+
+@app.post("/v1/ffmpeg/trim")
+async def trim_endpoint(
+    file: UploadFile = File(...),
+    start: float = Form(default=0.0),
+    end: float = Form(default=10.0),
+    request_id: str = Form(default=""),
+):
+    rid = request_id or "req-" + uuid.uuid4().hex[:8]
+    content = await file.read()
+    if not content:
+        return JSONResponse(status_code=400, content={"error": "Empty file"})
+
+    suffix = Path(file.filename or "media.mp4").suffix or ".mp4"
+    tmp = None
+    try:
+        with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as t:
+            tmp = t.name
+            t.write(content)
+
+        out_path, info = trim_media(Path(tmp), start, end)
+
+        out_data = Path(out_path).read_bytes()
+        out_b64 = base64.b64encode(out_data).decode()
+
+        try:
+            Path(out_path).unlink(missing_ok=True)
+        except Exception:
+            pass
+
+        return {
+            "file": out_b64,
+            "filename": Path(out_path).name,
+            "request_id": rid,
+            "info": {
+                "duration": info.get("format", {}).get("duration"),
+                "size": info.get("format", {}).get("size"),
+            }
+        }
+    except RuntimeError as e:
+        return JSONResponse(status_code=500, content={"error": str(e)[:200]})
+    finally:
+        try:
+            if tmp:
+                Path(tmp).unlink(missing_ok=True)
+        except Exception:
+            pass
+
+
+@app.post("/v1/ffmpeg/compress")
+async def compress_endpoint(
+    file: UploadFile = File(...),
+    target_size_mb: float = Form(default=10.0),
+    request_id: str = Form(default=""),
+):
+    rid = request_id or "req-" + uuid.uuid4().hex[:8]
+    content = await file.read()
+    if not content:
+        return JSONResponse(status_code=400, content={"error": "Empty file"})
+
+    suffix = Path(file.filename or "video.mp4").suffix or ".mp4"
+    tmp = None
+    try:
+        with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as t:
+            tmp = t.name
+            t.write(content)
+
+        out_path, info = compress_video(Path(tmp), target_size_mb)
+
+        out_data = Path(out_path).read_bytes()
+        out_b64 = base64.b64encode(out_data).decode()
+
+        try:
+            Path(out_path).unlink(missing_ok=True)
+        except Exception:
+            pass
+
+        return {
+            "file": out_b64,
+            "filename": Path(out_path).name,
+            "request_id": rid,
+            "info": {
+                "duration": info.get("format", {}).get("duration"),
+                "size": info.get("format", {}).get("size"),
+            }
+        }
+    except (ValueError, RuntimeError) as e:
+        return JSONResponse(status_code=400, content={"error": str(e)[:200]})
+    finally:
+        try:
+            if tmp:
+                Path(tmp).unlink(missing_ok=True)
+        except Exception:
+            pass
+
+
+@app.post("/v1/ffmpeg/info")
+async def media_info_endpoint(
+    file: UploadFile = File(...),
+    request_id: str = Form(default=""),
+):
+    rid = request_id or "req-" + uuid.uuid4().hex[:8]
+    content = await file.read()
+    if not content:
+        return JSONResponse(status_code=400, content={"error": "Empty file"})
+
+    suffix = Path(file.filename or "media.mp4").suffix or ".mp4"
+    tmp = None
+    try:
+        with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as t:
+            tmp = t.name
+            t.write(content)
+
+        info = get_media_info(Path(tmp))
+        return {"info": info, "request_id": rid}
+    finally:
+        try:
+            if tmp:
+                Path(tmp).unlink(missing_ok=True)
+        except Exception:
+            pass
 
 
 if __name__ == "__main__":
