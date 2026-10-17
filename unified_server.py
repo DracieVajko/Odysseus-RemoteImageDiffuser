@@ -24,7 +24,7 @@ from fastapi import FastAPI, File, Form, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from pydantic import BaseModel
-from typing import Optional
+from typing import Optional, Tuple
 
 from unified.audio_proxy import transcribe_via_service
 from unified.audio_splitter import transcribe_with_splitting, get_audio_duration
