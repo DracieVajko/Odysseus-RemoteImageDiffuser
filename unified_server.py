@@ -27,6 +27,7 @@ from pydantic import BaseModel
 from typing import Optional
 
 from unified.audio_proxy import transcribe_via_service
+from unified.audio_splitter import transcribe_with_splitting, get_audio_duration
 from unified.engine import init_diffusion_engine, try_real_inpaint
 from unified.model_manager import ModelManager, ModelLoadingError
 from unified.registry import build_registry
@@ -467,6 +468,22 @@ def _transcribe_with_whisper(tmp_path: str, wanted: str, language):
     return text, getattr(info, "language", language)
 
 
+async def _transcribe_with_splitting(audio_path: Path, wanted: str, language):
+    """Transcribe with auto-splitting for long audio files."""
+    def _transcribe_single(path: Path, lang: Optional[str]) -> Tuple[str, str]:
+        text, lang = _transcribe_with_whisper(str(path), wanted, lang)
+        return text, lang
+    
+    try:
+        # Use the audio splitter utility
+        from unified.audio_splitter import transcribe_with_splitting
+        text, lang = await transcribe_with_splitting(audio_path, _transcribe_single, language)
+        return text, lang
+    except Exception as e:
+        logger.warning(f"Audio splitting failed, falling back to single transcribe: {e}")
+        return _transcribe_single(audio_path, language)
+
+
 @app.post("/v1/audio/transcriptions")
 async def transcriptions(
     file: UploadFile = File(default=None),
@@ -477,6 +494,7 @@ async def transcriptions(
     device: str = Form(default=""),
     language: str = Form(default=None),
     response_format: str = Form(default="json"),
+    auto_split: str = Form(default="true"),
 ):
     up = file or audio
     url = (url or "").strip()
@@ -525,7 +543,11 @@ async def transcriptions(
             tmp = t.name
             t.write(content)
         try:
-            text, lang = _transcribe_with_whisper(tmp, wanted, language)
+            split_enabled = auto_split.lower() in ("true", "1", "yes", "on")
+            if split_enabled:
+                text, lang = await _transcribe_with_splitting(Path(tmp), wanted, language)
+            else:
+                text, lang = _transcribe_with_whisper(tmp, wanted, language)
             engine = "local"
         except Exception as e:
             logger.warning("local whisper missing (%s), proxy %s",

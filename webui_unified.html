@@ -114,6 +114,9 @@ canvas#maskpad { width: 100%; border-radius: 6px; border: 1px solid #444; cursor
 <div><label>Whisper model (small = minimum for SK)</label><select id="trmodel"><option>tiny</option><option>base</option><option selected>small</option><option>medium</option><option>turbo</option><option>large</option></select></div>
 <div><label>Language (empty = auto)</label><select id="trlang"><option value="">auto</option><option value="sk">sk</option><option value="cs">cs</option><option value="en">en</option></select></div>
 </div>
+<div class="row">
+<div><label><input type="checkbox" id="trsplit" checked> Auto-split long audio (>30s)</label></div>
+</div>
 <button class="go" id="btnTr" onclick="generateTr()">Transcribe</button>
 <div id="txtout">transcript appears here…</div>
 </div>
@@ -335,8 +338,10 @@ async function generateTr(){
   fd.append('model', document.getElementById('trmodel').value);
   const lang = document.getElementById('trlang').value;
   if (lang) fd.append('language', lang);
-  btn.disabled = true; btn.textContent = 'Transcribing… (minutes for large models)';
-  log('POST /v1/audio/transcriptions model='+document.getElementById('trmodel').value+' file='+f.name);
+  const split = document.getElementById('trsplit').checked;
+  if (split) fd.append('auto_split', 'true');
+  btn.disabled = true; btn.textContent = 'Transcribing… (auto-split if >30s)';
+  log('POST /v1/audio/transcriptions model='+document.getElementById('trmodel').value+' file='+f.name+' split='+split);
   const t0 = Date.now();
   try {
     const r = await fetch('/v1/audio/transcriptions',{method:'POST',body:fd});
