@@ -112,7 +112,16 @@ class MainActivity : AppCompatActivity() {
         }
         val startBtn = Button(this).apply { text = "Start server" }
         val stopBtn = Button(this).apply { text = "Stop server" }
+        val webuiBtn = Button(this).apply { text = "Open WebUI" }
+        webuiBtn.setOnClickListener {
+            startActivity(Intent(this, WebUIActivity::class.java))
+        }
+
         val refreshBtn = Button(this).apply { text = "Refresh status" }
+        refreshBtn.setOnClickListener { renderAll() }
+        webuiBtn.setOnClickListener {
+            startActivity(Intent(this, WebUIActivity::class.java))
+        }
         modelsBox = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
 
         fun renderStatus() {
@@ -148,6 +157,7 @@ class MainActivity : AppCompatActivity() {
             addView(startBtn)
             addView(stopBtn)
             addView(refreshBtn)
+            addView(webuiBtn)
             addView(status)
             addView(modelsBox)
         }

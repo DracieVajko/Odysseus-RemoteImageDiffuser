@@ -98,6 +98,8 @@ dependencies {
     implementation("androidx.appcompat:appcompat:1.7.0")
     implementation("com.google.android.material:material:1.12.0")
     implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.8.3")
+    // ONNX Runtime (pre LCM-Dreamshaper INT8 ONNX inferenciu na mobile, V2).
+    implementation("com.microsoft.onnxruntime:onnxruntime-android:1.19.2")
 
     // Audio dekódovanie: Android MediaCodec (AudioDecoder.kt) — BEZ ffmpeg.
     // Ruling 2026-10-16: com.arthenica:ffmpeg-kit-min artefakty sú stiahnuté
