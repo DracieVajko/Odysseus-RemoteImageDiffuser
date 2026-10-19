@@ -202,15 +202,17 @@ def health():
 def list_models():
     reg = _image_registry()
     st = _manager.status()
+    models = reg.get("image_models", {})
     data = [{"id": k, "object": "model", "owned_by": "unified",
-             "available": True} for k in sorted(reg.get("image_models", {}).keys())]
+             "available": not bool(models.get(k, {}).get("missing"))}
+            for k in sorted(models.keys())]
     return {
         "object": "list",
         "data": data,
         "currently_loaded_model": st["loaded_id"],
         "loading": st["loading"],
         "loading_model": st["loading_model"],
-        "missing_models": [],
+        "missing_models": [k for k, v in models.items() if v.get("missing")],
         "default_image_model": reg.get("default_image_model", ""),
         "default_audio_model": reg.get("default_audio_model", "small"),
         "audio_models": reg.get("audio_models", []),
