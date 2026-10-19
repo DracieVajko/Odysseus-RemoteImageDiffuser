@@ -25,12 +25,59 @@ Env: `UNIFIED_WHISPER_URL` (default `http://127.0.0.1:4444`),
 
 ## Modely
 
-- Obrazy: `models.json` (4× SD, ~19 GB) + `download_models.py --preset odysseus-default|sd15|sdxl`.
+- Obrazy: `models.json` (4× SD, ~19 GB) + `download_models.py --preset odysseus-default|sd15|sdxl|sdxl-turbo`.
 - Upscale: `models/RealESRGAN_x4v3/RealESRGAN_x4plus.pth` (67 MB, BSD-3)
-  cez `download_models.py --preset upscale`. Bez váhy = Pillow fallback
-  (odpoveď hlási `"engine": "pillow"`).
+  cez `download_models.py --preset upscale`. Bez váhy = Pillow fallback.
 - Audio: WhisperApi služba na :4444 (vlastný faster-whisper env) alebo
   `pip install faster-whisper` do `.venv` pre lokálny engine.
+- VLM: `download_models.py --preset vlm` (SmolVLM-500M, ~1 GB).
+
+### Install / uninstall z WebUI a CLI
+
+WebUI → tab **Models**: zoznam modelov, stav installed/not installed,
+tlačidlá **Install** / **Uninstall**, progress a „Install all missing".
+
+CLI:
+```powershell
+.venv\Scripts\python.exe generate_image.py models            # katalóg + stav
+.venv\Scripts\python.exe generate_image.py install SDXL_Turbo
+.venv\Scripts\python.exe generate_image.py uninstall SDXL_Turbo
+.venv\Scripts\python.exe generate_image.py status            # server + modely
+```
+
+API:
+- `GET  /v1/models/catalog`
+- `POST /v1/models/install    {"id": "..."}`
+- `POST /v1/models/uninstall  {"id": "..."}`
+- `GET  /v1/settings`
+
+Uninstall má path guard: nikdy nezmaže nič mimo `models/`.
+
+## FFmpeg tools (WebUI tab Tools + CLI)
+
+```powershell
+python generate_image.py presets
+python generate_image.py video --input in.mp4 --preset mp4-small --resize 720p --output out.mp4
+python generate_image.py audio --input in.wav --preset mp3-128 --output out.mp3
+python generate_image.py extract --input video.mp4 --format wav --output a.wav
+python generate_image.py trim --input in.mp4 --start 1 --end 5 --output cut.mp4
+python generate_image.py compress --input in.mp4 --size-mb 10 --output small.mp4
+python generate_image.py info --input in.mp4
+```
+
+API: `GET /v1/ffmpeg/presets`, `POST /v1/ffmpeg/{convert-video|convert-audio|
+extract-audio|trim|compress|info}` (multipart).
+
+## Prepnutie Windows služby na unified
+
+`OdysseusDiffusion` služba dnes beží starý `diffusion_server.py`. Prepnutie
+(mení bežiacu službu, spusti vedome):
+
+```powershell
+.\Switch-Service-ToUnified.ps1 -WhatIf   # ukáže, čo by zmenil
+.\Switch-Service-ToUnified.ps1           # prepne na unified_server
+.\Switch-Service-ToUnified.ps1 -Revert   # vráti starý diffusion_server
+```
 
 ## Odysseus wiring
 
@@ -50,4 +97,23 @@ V1 — venv má ~8 GB, modely ~19 GB, nič z toho necommitovať.
 ## Android
 
 Pozri `android/README.md` + `android/contract-compat.md` a `docs/ANDROID.md`.
-`./gradlew :app:assembleDebug` až na stroji s Android SDK (tu nie je).
+`./gradlew :app:assembleDebug` až na stroji s Android SDK.
+
+Android appka má vlastné UI (status karta, Local/Auto/Remote, modely
+s Install/Uninstall a reálnym progress barom, activity log) a navyše
+**Open Web UI** — servíruje rovnaké `webui_unified.html` z APK assets,
+takže UI je identické s PC. WebUI sa do APK syncuje pri každom builde
+(Gradle task `syncWebUi`).
+
+Na mobile funguje reálne: `/health`, `/v1/models`, `/v1/audio/*` (whisper JNI),
+`/v1/models/catalog|install|uninstall`, `/v1/settings`, `/webui`.
+Generovanie obrázkov / upscale / caption vracajú 503 (mobilný engine nie je
+hotový) — vtedy použi Remote mode na PC.
+
+### Test cez adb
+
+```powershell
+powershell -ExecutionPolicy Bypass -File android/adb_test.ps1
+```
+Skript: forward `8199→8101`, health, modely, transcribe smoke, caption 503 check,
+logcat.

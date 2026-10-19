@@ -16,6 +16,7 @@ import json
 import sys
 import urllib.error
 import urllib.request
+from pathlib import Path
 
 SERVER = "http://127.0.0.1:8101"
 
@@ -259,6 +260,72 @@ def cmd_status(_):
         print("catalog: UNREACHABLE", str(e)[:100])
 
 
+def cmd_video(a):
+    from unified.ffmpeg_tools import convert_video
+    out, info = convert_video(
+        Path(a.input), preset=a.preset,
+        output_path=Path(a.output) if a.output else None,
+        resize=a.resize or None,
+        trim_start=a.start, trim_end=a.end,
+    )
+    print("saved ->", out)
+    fmt = info.get("format", {})
+    print("duration=%ss size=%s format=%s" % (fmt.get("duration"), fmt.get("size"), fmt.get("format_name")))
+
+
+def cmd_audio(a):
+    from unified.ffmpeg_tools import convert_audio
+    out, info = convert_audio(
+        Path(a.input), preset=a.preset,
+        output_path=Path(a.output) if a.output else None,
+        trim_start=a.start, trim_end=a.end,
+    )
+    print("saved ->", out)
+    fmt = info.get("format", {})
+    print("duration=%ss size=%s" % (fmt.get("duration"), fmt.get("size")))
+
+
+def cmd_extract(a):
+    from unified.ffmpeg_tools import extract_audio
+    out, info = extract_audio(
+        Path(a.input), output_path=Path(a.output) if a.output else None,
+        audio_format=a.format,
+    )
+    print("saved ->", out)
+
+
+def cmd_trim(a):
+    from unified.ffmpeg_tools import trim_media
+    out, info = trim_media(
+        Path(a.input), a.start, a.end,
+        output_path=Path(a.output) if a.output else None,
+    )
+    print("saved ->", out)
+    print("duration=%ss" % info.get("format", {}).get("duration"))
+
+
+def cmd_compress(a):
+    from unified.ffmpeg_tools import compress_video
+    out, info = compress_video(
+        Path(a.input), a.size_mb,
+        output_path=Path(a.output) if a.output else None,
+    )
+    print("saved ->", out)
+    print("size=%sMB" % round(Path(out).stat().st_size / 1e6, 2))
+
+
+def cmd_mediainfo(a):
+    import json as _json
+    from unified.ffmpeg_tools import get_media_info
+    print(_json.dumps(get_media_info(Path(a.input)), indent=2))
+
+
+def cmd_presets(_):
+    import json as _json
+    from unified.ffmpeg_tools import get_presets
+    print(_json.dumps(get_presets(), indent=2))
+
+
 def main():
     ap = argparse.ArgumentParser(description="DiffusionServer CLI")
     ap.add_argument("--server", default="http://127.0.0.1:8101")
@@ -316,6 +383,42 @@ def main():
     p.add_argument("ids", nargs="+")
     p = sub.add_parser("status", help="server + models status")
 
+    p = sub.add_parser("video", help="convert video with preset")
+    p.add_argument("--input", required=True)
+    p.add_argument("--preset", default="mp4-h264")
+    p.add_argument("--resize", default="")
+    p.add_argument("--start", type=float, default=None)
+    p.add_argument("--end", type=float, default=None)
+    p.add_argument("--output", default="")
+
+    p = sub.add_parser("audio", help="convert audio with preset")
+    p.add_argument("--input", required=True)
+    p.add_argument("--preset", default="mp3-128")
+    p.add_argument("--start", type=float, default=None)
+    p.add_argument("--end", type=float, default=None)
+    p.add_argument("--output", default="")
+
+    p = sub.add_parser("extract", help="extract audio from video")
+    p.add_argument("--input", required=True)
+    p.add_argument("--format", default="wav")
+    p.add_argument("--output", default="")
+
+    p = sub.add_parser("trim", help="trim media (copy, no re-encode)")
+    p.add_argument("--input", required=True)
+    p.add_argument("--start", type=float, required=True)
+    p.add_argument("--end", type=float, required=True)
+    p.add_argument("--output", default="")
+
+    p = sub.add_parser("compress", help="compress video to target size")
+    p.add_argument("--input", required=True)
+    p.add_argument("--size-mb", dest="size_mb", type=float, default=10.0)
+    p.add_argument("--output", default="")
+
+    p = sub.add_parser("info", help="ffprobe media info as JSON")
+    p.add_argument("--input", required=True)
+
+    sub.add_parser("presets", help="list ffmpeg presets as JSON")
+
     a = ap.parse_args()
     global SERVER
     SERVER = a.server.rstrip("/")
@@ -323,7 +426,9 @@ def main():
      "txt2img": cmd_txt2img, "img2img": cmd_img2img, "inpaint": cmd_inpaint,
      "upscale": cmd_upscale, "transcribe": cmd_transcribe,
      "caption": cmd_caption, "install": cmd_install, "uninstall": cmd_uninstall,
-     "status": cmd_status}[a.cmd](a)
+     "status": cmd_status, "video": cmd_video, "audio": cmd_audio,
+     "extract": cmd_extract, "trim": cmd_trim, "compress": cmd_compress,
+     "info": cmd_mediainfo, "presets": cmd_presets}[a.cmd](a)
 
 
 if __name__ == "__main__":
