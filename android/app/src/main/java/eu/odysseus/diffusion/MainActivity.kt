@@ -430,7 +430,7 @@ class DiffusionService : Service() {
         val mode = intent?.getStringExtra("mode") ?: "AUTO"
         val remote = intent?.getStringExtra("remote") ?: ""
         if (server == null) {
-            server = ApiServer(AppGraph.manager, ModelDownloader(this)).also { it.start(wait = false) }
+            server = ApiServer(AppGraph.manager, ModelDownloader(this), applicationContext).also { it.start(wait = false) }
             (getSystemService(NOTIFICATION_SERVICE) as NotificationManager)
                 .notify(1, buildNotification("Server running on :8101 · mode=$mode" + if (remote.isNotBlank()) " · remote=$remote" else ""))
         }

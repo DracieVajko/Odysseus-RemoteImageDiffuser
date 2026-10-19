@@ -86,6 +86,14 @@ fun findNdkDir(): File? {
         ?: ndkRoot.listFiles()?.firstOrNull { it.isDirectory }
 }
 
+// WebUI sa syncuje z PC verzie pri každom builde (single source of truth).
+val syncWebUi by tasks.registering(Copy::class) {
+    from(rootProject.file("../webui_unified.html"))
+    into(layout.projectDirectory.dir("src/main/assets"))
+    rename { "webui.html" }
+}
+tasks.named("preBuild") { dependsOn(syncWebUi) }
+
 dependencies {
     val ktor = "2.3.12"
     implementation("io.ktor:ktor-server-core:$ktor")

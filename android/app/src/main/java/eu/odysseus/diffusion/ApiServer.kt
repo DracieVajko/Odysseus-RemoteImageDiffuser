@@ -12,7 +12,10 @@ import io.ktor.server.plugins.contentnegotiation.ContentNegotiation
 import io.ktor.server.plugins.statuspages.StatusPages
 import io.ktor.server.request.receive
 import io.ktor.server.request.receiveMultipart
+import io.ktor.server.request.receiveText
 import io.ktor.server.response.respond
+import io.ktor.server.response.respondText
+import io.ktor.http.ContentType
 import io.ktor.server.routing.get
 import io.ktor.server.routing.post
 import io.ktor.server.routing.routing
@@ -150,6 +153,7 @@ fun jsonOf(vararg pairs: Pair<String, Any?>): JsonObject =
 class ApiServer(
     private val manager: ModelManager,
     private val downloader: ModelDownloader,
+    private val appContext: android.content.Context? = null,
 ) {
     private val progress = ConcurrentHashMap<String, JobProgress>()
     private var engine: NettyApplicationEngine? = null
@@ -262,6 +266,93 @@ class ApiServer(
                         ),
                     )
                 }
+            }
+            get("/webui") {
+                // Rovnaké UI ako PC: HTML sa balí do APK (assets/webui.html).
+                val html = appContext?.assets?.open("webui.html")
+                    ?.bufferedReader()?.use { it.readText() }
+                if (html == null) {
+                    call.respondText(
+                        "<h3>WebUI asset missing</h3>",
+                        ContentType.Text.Html,
+                        HttpStatusCode.InternalServerError,
+                    )
+                } else {
+                    call.respondText(html, ContentType.Text.Html)
+                }
+            }
+            get("/v1/models/catalog") {
+                val rows = ModelCatalog.assets.map { a ->
+                    jsonOf(
+                        "id" to a.id,
+                        "kind" to a.kind,
+                        "label" to a.label,
+                        "size_gb" to (a.sizeMb / 1024.0),
+                        "installed" to downloader.isReady(a.id),
+                        "installed_gb" to (downloader.installedSizeMb(a.id) / 1024.0),
+                        "install_state" to if (downloader.isReady(a.id)) "done" else "idle",
+                        "install_progress" to 0,
+                        "url" to a.url,
+                    )
+                }
+                call.respond(jsonOf("models" to rows))
+            }
+            post("/v1/models/install") {
+                val body = call.receiveText()
+                val id = Regex("\"id\"\\s*:\\s*\"([^\"]+)\"").find(body)?.groupValues?.get(1)
+                    ?: return@post call.respond(HttpStatusCode.BadRequest, jsonOf("error" to "missing id"))
+                val asset = ModelCatalog.assets.firstOrNull { it.id == id }
+                    ?: return@post call.respond(HttpStatusCode.NotFound, jsonOf("error" to "unknown model id: $id"))
+                if (asset.url.isBlank()) {
+                    return@post call.respond(HttpStatusCode.BadRequest, jsonOf("error" to "no verified source for $id"))
+                }
+                val dlId = downloader.enqueue(asset)
+                call.respond(jsonOf("id" to id, "state" to "downloading", "download_id" to dlId))
+            }
+            post("/v1/models/uninstall") {
+                val body = call.receiveText()
+                val id = Regex("\"id\"\\s*:\\s*\"([^\"]+)\"").find(body)?.groupValues?.get(1)
+                    ?: return@post call.respond(HttpStatusCode.BadRequest, jsonOf("error" to "missing id"))
+                if (ModelCatalog.assets.none { it.id == id }) {
+                    return@post call.respond(HttpStatusCode.NotFound, jsonOf("error" to "unknown model id: $id"))
+                }
+                val ok = downloader.uninstall(id)
+                call.respond(jsonOf("id" to id, "removed" to ok))
+            }
+            get("/v1/settings") {
+                val rt = Runtime.getRuntime()
+                call.respond(
+                    jsonOf(
+                        "version" to "android-0.1.0",
+                        "port" to SERVER_PORT,
+                        "whisper_url" to "local (JNI libwhisper_jni.so)",
+                        "models_dir" to downloader.modelsDir().absolutePath,
+                        "default_image_model" to "lcm-dreamshaper-int8-onnx",
+                        "audio_models" to ModelCatalog.assets.filter { it.kind == "audio" }.map { it.id },
+                        "engines" to jsonOf(
+                            "torch" to false,
+                            "cuda" to false,
+                            "onnxruntime" to true,
+                            "whisper_native" to WhisperLib.isAvailable(),
+                            "java_heap_free_mb" to (rt.freeMemory() / 1048576),
+                            "java_heap_max_mb" to (rt.maxMemory() / 1048576),
+                        ),
+                    ),
+                )
+            }
+            // FFmpeg Tools: na zariadení nie sú (MediaCodec pokrýva audio
+            // dekódovanie pre whisper). WebUI tab funguje na PC / v Remote mode.
+            get("/v1/ffmpeg/presets") {
+                call.respond(
+                    HttpStatusCode.ServiceUnavailable,
+                    jsonOf("error" to "ffmpeg tools run on PC (:8101) or via Remote mode"),
+                )
+            }
+            post("/v1/ffmpeg/{op}") {
+                call.respond(
+                    HttpStatusCode.ServiceUnavailable,
+                    jsonOf("error" to "ffmpeg tools run on PC (:8101) or via Remote mode"),
+                )
             }
             post("/v1/images/generations") {
                 val req = call.receive<GenerationReq>()

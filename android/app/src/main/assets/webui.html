@@ -1,0 +1,547 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Unified Standalone WebUI</title>
+<style>
+:root { color-scheme: dark; }
+body { font-family: system-ui, Segoe UI, Arial, sans-serif; background: #14161a; color: #e8eaf0; margin: 0; }
+header { padding: 12px 16px; background: #1d2127; border-bottom: 1px solid #333; display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
+header h1 { font-size: 18px; margin: 0; }
+#status { font-size: 13px; color: #9fb3c8; }
+#status b.ok { color: #7ee787; } #status b.bad { color: #ff7b72; }
+main { display: grid; grid-template-columns: 400px 1fr; gap: 16px; padding: 16px; }
+@media (max-width: 900px) { main { grid-template-columns: 1fr; } }
+.panel { background: #1d2127; border: 1px solid #333; border-radius: 8px; padding: 14px; }
+.tabs { display: flex; gap: 6px; margin-bottom: 12px; flex-wrap: wrap; }
+.tabs button { flex: 1; min-width: 70px; padding: 8px 4px; font-size: 12px; border-radius: 6px; border: 1px solid #444; background: #262b33; color: #fff; cursor: pointer; }
+.tabs button.active { background: #2f81f7; border-color: #2f81f7; }
+label { display: block; font-size: 13px; margin: 10px 0 4px; color: #9fb3c8; }
+input[type=text], textarea, select { width: 100%; box-sizing: border-box; background: #0f1114; color: #fff; border: 1px solid #444; border-radius: 6px; padding: 8px; }
+textarea { min-height: 70px; resize: vertical; }
+.row { display: flex; gap: 8px; } .row > div { flex: 1; }
+button.go { width: 100%; margin-top: 12px; padding: 10px; font-size: 15px; border: 0; border-radius: 6px; background: #238636; color: #fff; cursor: pointer; }
+button.go:disabled { opacity: .5; cursor: wait; }
+#warn { background: #5a2d0c; border: 1px solid #a35c00; border-radius: 6px; padding: 8px 10px; font-size: 13px; margin-bottom: 10px; display: none; }
+#gallery { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 12px; }
+figure { margin: 0; background: #1d2127; border: 1px solid #333; border-radius: 8px; overflow: hidden; }
+figure img { width: 100%; display: block; }
+figcaption { font-size: 12px; padding: 8px 10px; color: #9fb3c8; word-break: break-word; }
+figcaption a { color: #2f81f7; }
+#log { font-size: 12px; white-space: pre-wrap; background: #0f1114; border: 1px solid #333; border-radius: 6px; padding: 8px; min-height: 60px; margin-top: 10px; }
+img.preview { max-width: 100%; border-radius: 6px; border: 1px solid #444; margin-top: 6px; }
+canvas#maskpad { width: 100%; border-radius: 6px; border: 1px solid #444; cursor: crosshair; touch-action: none; }
+#txtout { font-size: 14px; background: #0f1114; border: 1px solid #333; border-radius: 6px; padding: 10px; margin-top: 10px; white-space: pre-wrap; min-height: 40px; }
+</style>
+</head>
+<body>
+<header>
+<h1>Unified Standalone WebUI</h1>
+<span id="status">connecting…</span>
+<button onclick="refresh()" style="margin-left:auto;padding:6px 12px;border-radius:6px;border:1px solid #444;background:#262b33;color:#fff;cursor:pointer">Refresh</button>
+</header>
+<main>
+<div class="panel">
+<div id="warn"></div>
+<div class="tabs">
+<button id="tabTxt" class="active" onclick="showTab('txt')">Generate</button>
+<button id="tabImg" onclick="showTab('img')">Edit</button>
+<button id="tabPaint" onclick="showTab('paint')">Inpaint</button>
+<button id="tabUp" onclick="showTab('up')">Upscale</button>
+<button id="tabTr" onclick="showTab('tr')">Transcribe</button>
+<button id="tabCap" onclick="showTab('cap')">Caption (VLM)</button>
+<button id="tabTools" onclick="showTab('tools')">Tools (FFmpeg)</button>
+<button id="tabModels" onclick="showTab('models')">Models</button>
+<button id="tabSettings" onclick="showTab('settings')">Settings</button>
+</div>
+<label>Image model</label>
+<select id="model"><option value="">(loading…)</option></select>
+
+<div id="formTxt">
+<label>Prompt</label>
+<textarea id="prompt" placeholder="a cozy mountain cabin at sunset, pine forest, detailed"></textarea>
+<div class="row">
+<div><label>Size</label><select id="size"><option>512x512</option><option selected>768x768</option><option>1024x1024</option></select></div>
+<div><label>Quality</label><select id="quality"><option value="low">low (fast)</option><option value="medium" selected>medium</option><option value="high">high (slow)</option></select></div>
+</div>
+<button class="go" id="btnTxt" onclick="generateTxt()">Generate</button>
+</div>
+
+<div id="formImg" style="display:none">
+<label>Reference image</label>
+<input type="file" id="refimg" accept="image/*" onchange="previewRef(this,'refprev')">
+<img id="refprev" class="preview" style="display:none">
+<label>Prompt (what to change / style)</label>
+<textarea id="prompt2" placeholder="same cabin in winter, snow, night lights"></textarea>
+<div class="row">
+<div><label>Size</label><select id="size2"><option>512x512</option><option selected>768x768</option><option>1024x1024</option></select></div>
+<div><label>Quality</label><select id="quality2"><option value="low">low</option><option value="medium" selected>medium</option><option value="high">high</option></select></div>
+</div>
+<label>Change strength: <span id="strval">0.75</span></label>
+<input type="range" id="strength" min="0.1" max="1" step="0.05" value="0.75" style="width:100%" oninput="document.getElementById('strval').textContent=this.value">
+<button class="go" id="btnImg" onclick="generateImg()">Generate from reference</button>
+</div>
+
+<div id="formPaint" style="display:none">
+<label>Image to fix (e.g. remove people in background)</label>
+<input type="file" id="paintimg" accept="image/*" onchange="loadPaint(this)">
+<label>Paint over the area to replace (white = repaint)</label>
+<canvas id="maskpad" width="384" height="384"></canvas>
+<div class="row">
+<div><label>Brush</label><input type="range" id="brush" min="4" max="60" value="24" style="width:100%"></div>
+<div><label>&nbsp;</label><button onclick="clearMask()" style="width:100%;padding:8px;border-radius:6px;border:1px solid #444;background:#262b33;color:#fff;cursor:pointer">Clear mask</button></div>
+</div>
+<label>Prompt (what should be there instead)</label>
+<textarea id="prompt3" placeholder="empty street, no people, clean background"></textarea>
+<label>Inpaint strength: <span id="strval3">0.85</span></label>
+<input type="range" id="strength3" min="0.1" max="1" step="0.05" value="0.85" style="width:100%" oninput="document.getElementById('strval3').textContent=this.value">
+<button class="go" id="btnPaint" onclick="generatePaint()">Inpaint masked area</button>
+</div>
+
+<div id="formUp" style="display:none">
+<label>Image to upscale (Real-ESRGAN-x4v3, photos; Waifu2x-class for anime via scale 2)</label>
+<input type="file" id="upimg" accept="image/*" onchange="previewRef(this,'upprev')">
+<img id="upprev" class="preview" style="display:none">
+<div class="row">
+<div><label>Scale</label><select id="upscale"><option value="2" selected>2x</option><option value="3">3x</option><option value="4">4x</option></select></div>
+<div><label>Model</label><select id="upmodel"><option selected>RealESRGAN_x4v3</option></select></div>
+</div>
+<button class="go" id="btnUp" onclick="generateUp()">Upscale</button>
+</div>
+
+<div id="formTr" style="display:none">
+<label>Audio or video file (mp3/wav/m4a/webm/mp4, max 100 MB)</label>
+<input type="file" id="trfile" accept="audio/*,video/*">
+<div class="row">
+<div><label>Whisper model (small = minimum for SK)</label><select id="trmodel"><option>tiny</option><option>base</option><option selected>small</option><option>medium</option><option>turbo</option><option>large</option></select></div>
+<div><label>Language (empty = auto)</label><select id="trlang"><option value="">auto</option><option value="sk">sk</option><option value="cs">cs</option><option value="en">en</option></select></div>
+</div>
+<div class="row">
+<div><label><input type="checkbox" id="trsplit" checked> Auto-split long audio (>30s)</label></div>
+</div>
+<button class="go" id="btnTr" onclick="generateTr()">Transcribe</button>
+<div id="txtout">transcript appears here…</div>
+</div>
+
+<div id="formCap" style="display:none">
+<label>Image to describe (SmolVLM-500M, PC engine)</label>
+<input type="file" id="capimg" accept="image/*" onchange="previewRef(this,'capprev')">
+<img id="capprev" class="preview" style="display:none">
+<label>Prompt</label>
+<textarea id="prompt4" placeholder="Describe the image in detail."></textarea>
+<button class="go" id="btnCap" onclick="generateCap()">Caption</button>
+<div id="capout">caption appears here…</div>
+</div>
+
+<div id="formTools" style="display:none">
+<label>FFmpeg Tools — convert, compress, extract, trim</label>
+<div class="row">
+<div><label>Input file</label><input type="file" id="toolfile" accept="*/*"></div>
+<div><label>Operation</label><select id="toolop">
+<option value="convert-video">Convert Video</option>
+<option value="convert-audio">Convert Audio</option>
+<option value="extract-audio">Extract Audio</option>
+<option value="trim">Trim</option>
+<option value="compress">Compress</option>
+<option value="info">Media Info</option>
+</select></div>
+</div>
+<div id="toolOpts"></div>
+<button class="go" id="btnTool" onclick="runTool()">Run</button>
+<div id="toolout">result appears here…</div>
+</div>
+
+<div id="formModels" style="display:none">
+<label>Installed / available models</label>
+<div class="row" style="margin-bottom:8px">
+<div><button class="go" style="margin-top:0" onclick="loadCatalog()">Refresh catalog</button></div>
+<div><button class="go" style="margin-top:0;background:#1f6feb" onclick="installMissing()">Install all missing</button></div>
+</div>
+<div id="modelList"></div>
+</div>
+
+<div id="formSettings" style="display:none">
+<label>Server</label>
+<div id="settingsBox" style="font-size:12px;background:#0f1114;border:1px solid #333;border-radius:6px;padding:10px;white-space:pre-wrap">loading…</div>
+</div>
+
+<div id="log"></div>
+</div>
+<div>
+<div id="gallery"></div>
+</div>
+</main>
+<script>
+let MODELS = [];
+function log(m){ const el=document.getElementById('log'); el.textContent = new Date().toLocaleTimeString()+' '+m+'\n'+el.textContent; }
+const TABS = ['txt','img','paint','up','tr','cap','tools','models','settings'];
+function showTab(t){ if(t==='models') loadCatalog(); if(t==='settings') loadSettings();
+  for (const x of TABS) {
+    document.getElementById('tab'+x[0].toUpperCase()+x.slice(1)).classList.toggle('active', x===t);
+    document.getElementById('form'+x[0].toUpperCase()+x.slice(1)).style.display = x===t?'block':'none';
+  }
+}
+function previewRef(inp, id){
+  const f = inp.files[0]; if(!f) return;
+  const img = document.getElementById(id);
+  img.src = URL.createObjectURL(f); img.style.display='block';
+}
+async function refresh(){
+  const st = document.getElementById('status');
+  try {
+    const h = await (await fetch('/health')).json();
+    const m = await (await fetch('/v1/models')).json();
+    MODELS = m.data || [];
+    const sel = document.getElementById('model');
+    const prev = sel.value;
+    sel.innerHTML = '';
+    for (const x of MODELS) {
+      const o = document.createElement('option');
+      o.value = x.id; o.textContent = x.available === false ? x.id+' (unavailable)' : x.id;
+      sel.appendChild(o);
+    }
+    if (prev) sel.value = prev;
+    try { const saved = localStorage.getItem('u_model'); if (saved && !prev) sel.value = saved; } catch(e){}
+    const miss = m.missing_models || [];
+    const w = document.getElementById('warn');
+    if (miss.length) { w.style.display='block'; w.textContent = 'Missing model files: '+miss.join(', ')+'.'; }
+    else { w.style.display='none'; }
+    st.innerHTML = 'server <b class="ok">OK</b> · img models: '+MODELS.length+' · loaded: '+(h.current_model||h.model||'none (lazy)')
+      +' · audio: '+(m.default_audio_model||'?')+(h.audio_loaded?' (loaded)':'')
+      + (h.busy ? ' · <b class="bad">BUSY</b> (queue: '+(h.queue||0)+')' : '');
+  } catch(e){ st.innerHTML = 'server <b class="bad">UNREACHABLE</b> · '+e; }
+}
+function rid(){ return Math.random().toString(16).slice(2)+Date.now().toString(16); }
+function addCard(src, caption, fname){
+  const g = document.getElementById('gallery');
+  const fig = document.createElement('figure');
+  const img = document.createElement('img'); img.src = src;
+  const cap = document.createElement('figcaption');
+  const a = document.createElement('a'); a.href = src; a.download = fname||'image.png'; a.textContent = 'download PNG';
+  cap.textContent = caption+' ';
+  cap.appendChild(a); fig.appendChild(img); fig.appendChild(cap);
+  g.prepend(fig);
+}
+async function pollProgress(id, btn, label){
+  const t0 = Date.now();
+  let errs = 0;
+  while (Date.now()-t0 < 1000*60*10) {
+    await new Promise(r=>setTimeout(r, 2000));
+    let p = null;
+    try { p = await (await fetch('/v1/images/progress/'+id)).json(); }
+    catch(e){ if(++errs > 5) break; else continue; }
+    if (p && p.status && p.status!=='unknown') {
+      btn.textContent = label+'… '+ (p.percent||0) +'%';
+      if (p.status==='done'||p.status==='error') break;
+    }
+  }
+}
+function fileToB64(file){
+  return new Promise((res, rej) => {
+    const r = new FileReader();
+    r.onload = () => res(r.result.split(',')[1]);
+    r.onerror = rej;
+    r.readAsDataURL(file);
+  });
+}
+async function generateTxt(){
+  const btn = document.getElementById('btnTxt');
+  const body = { model: document.getElementById('model').value,
+    prompt: document.getElementById('prompt').value.trim(),
+    size: document.getElementById('size').value,
+    quality: document.getElementById('quality').value, n: 1, request_id: rid() };
+  if(!body.prompt){ alert('Enter a prompt'); return; }
+  btn.disabled = true; btn.textContent = 'Generating…';
+  log('POST /v1/images/generations model='+body.model);
+  pollProgress(body.request_id, btn, 'Generating');
+  const t0 = Date.now();
+  try {
+    const r = await fetch('/v1/images/generations',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+    const j = await r.json();
+    if(!r.ok){ log('ERROR '+r.status+': '+JSON.stringify(j).slice(0,500)); alert('Error '+r.status); return; }
+    const secs = ((Date.now()-t0)/1000).toFixed(1);
+    for (const d of (j.data||[])) addCard('data:image/png;base64,'+d.b64_json, body.model+' · '+body.prompt.slice(0,80)+' · '+secs+'s', 'txt_'+Date.now()+'.png');
+    log('done in '+secs+'s');
+  } catch(e){ log('ERROR: '+e); } finally { btn.disabled=false; btn.textContent='Generate'; refresh(); }
+}
+async function generateImg(){
+  const btn = document.getElementById('btnImg');
+  const f = document.getElementById('refimg').files[0];
+  const prompt = document.getElementById('prompt2').value.trim();
+  if(!f){ alert('Pick a reference image'); return; }
+  if(!prompt){ alert('Enter a prompt'); return; }
+  const fd = new FormData();
+  fd.append('prompt', prompt); fd.append('image', f);
+  fd.append('model', document.getElementById('model').value);
+  fd.append('size', document.getElementById('size2').value);
+  fd.append('quality', document.getElementById('quality2').value);
+  fd.append('strength', document.getElementById('strength').value);
+  const id = rid(); fd.append('request_id', id);
+  btn.disabled = true; btn.textContent = 'Generating…';
+  pollProgress(id, btn, 'Generating');
+  const t0 = Date.now();
+  try {
+    const r = await fetch('/v1/images/edits',{method:'POST',body:fd});
+    const j = await r.json();
+    if(!r.ok){ log('ERROR '+r.status+': '+JSON.stringify(j).slice(0,500)); alert('Error '+r.status); return; }
+    const secs = ((Date.now()-t0)/1000).toFixed(1);
+    const items = j.data || (j.image ? [{b64_json:j.image}] : []);
+    for (const d of items) addCard('data:image/png;base64,'+d.b64_json, 'edit · '+prompt.slice(0,80)+' · '+secs+'s', 'edit_'+Date.now()+'.png');
+    log('done in '+secs+'s');
+  } catch(e){ log('ERROR: '+e); } finally { btn.disabled=false; btn.textContent='Generate from reference'; refresh(); }
+}
+// --- Inpaint mask editor ---
+let paintImg = null;
+const pad = document.getElementById('maskpad');
+const pctx = pad.getContext('2d');
+pctx.fillStyle = '#000'; pctx.fillRect(0,0,pad.width,pad.height);
+let drawing = false;
+function padPos(e){
+  const r = pad.getBoundingClientRect();
+  const cx = (e.touches ? e.touches[0].clientX : e.clientX) - r.left;
+  const cy = (e.touches ? e.touches[0].clientY : e.clientY) - r.top;
+  return [cx * pad.width / r.width, cy * pad.height / r.height];
+}
+function dot(x, y){
+  pctx.fillStyle = '#fff'; pctx.strokeStyle = '#fff';
+  const b = +document.getElementById('brush').value;
+  pctx.lineWidth = b; pctx.lineCap = 'round';
+  pctx.beginPath(); pctx.moveTo(x, y); pctx.lineTo(x+0.1, y+0.1); pctx.stroke();
+}
+pad.addEventListener('pointerdown', e => { drawing = true; pad.setPointerCapture(e.pointerId); const [x,y]=padPos(e); dot(x,y); });
+pad.addEventListener('pointermove', e => { if(!drawing) return; const [x,y]=padPos(e); dot(x,y); });
+pad.addEventListener('pointerup', () => drawing = false);
+function clearMask(){ pctx.fillStyle='#000'; pctx.fillRect(0,0,pad.width,pad.height); }
+function loadPaint(inp){
+  const f = inp.files[0]; if(!f) return;
+  const img = new Image();
+  img.onload = () => {
+    const c = document.createElement('canvas');
+    c.width = img.width; c.height = img.height;
+    c.getContext('2d').drawImage(img, 0, 0);
+    paintImg = c.toDataURL('image/png').split(',')[1];
+    clearMask(); log('inpaint source loaded '+img.width+'x'+img.height);
+    URL.revokeObjectURL(img.src);
+  };
+  img.src = URL.createObjectURL(f);
+}
+async function generatePaint(){
+  const btn = document.getElementById('btnPaint');
+  const prompt = document.getElementById('prompt3').value.trim();
+  if(!paintImg){ alert('Pick an image first'); return; }
+  if(!prompt){ alert('Enter a prompt'); return; }
+  const mask = pad.toDataURL('image/png').split(',')[1];
+  const body = { image: paintImg, mask, prompt,
+    model: document.getElementById('model').value,
+    strength: +document.getElementById('strength3').value, request_id: rid() };
+  btn.disabled = true; btn.textContent = 'Inpainting…';
+  pollProgress(body.request_id, btn, 'Inpainting');
+  const t0 = Date.now();
+  try {
+    const r = await fetch('/v1/images/inpaint',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+    const j = await r.json();
+    if(!r.ok){ log('ERROR '+r.status+': '+JSON.stringify(j).slice(0,500)); alert('Error '+r.status); return; }
+    const secs = ((Date.now()-t0)/1000).toFixed(1);
+    addCard('data:image/png;base64,'+j.image, 'inpaint ('+(j.engine||'?')+') · '+prompt.slice(0,80)+' · '+secs+'s', 'inpaint_'+Date.now()+'.png');
+    log('done in '+secs+'s engine='+(j.engine||'?'));
+  } catch(e){ log('ERROR: '+e); } finally { btn.disabled=false; btn.textContent='Inpaint masked area'; refresh(); }
+}
+async function generateUp(){
+  const btn = document.getElementById('btnUp');
+  const f = document.getElementById('upimg').files[0];
+  if(!f){ alert('Pick an image'); return; }
+  const body = { image: await fileToB64(f), scale: +document.getElementById('upscale').value,
+    model: document.getElementById('upmodel').value, request_id: rid() };
+  btn.disabled = true; btn.textContent = 'Upscaling…';
+  const t0 = Date.now();
+  try {
+    const r = await fetch('/v1/images/upscale',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+    const j = await r.json();
+    if(!r.ok){ log('ERROR '+r.status+': '+JSON.stringify(j).slice(0,500)); alert('Error '+r.status); return; }
+    const secs = ((Date.now()-t0)/1000).toFixed(1);
+    addCard('data:image/png;base64,'+j.image, 'upscale '+j.scale+'x ('+j.model+') · '+secs+'s', 'up_'+Date.now()+'.png');
+    log('done in '+secs+'s');
+  } catch(e){ log('ERROR: '+e); } finally { btn.disabled=false; btn.textContent='Upscale'; refresh(); }
+}
+async function generateTr(){
+  const btn = document.getElementById('btnTr');
+  const f = document.getElementById('trfile').files[0];
+  if(!f){ alert('Pick an audio/video file'); return; }
+  const fd = new FormData();
+  fd.append('file', f);
+  fd.append('model', document.getElementById('trmodel').value);
+  const lang = document.getElementById('trlang').value;
+  if (lang) fd.append('language', lang);
+  const split = document.getElementById('trsplit').checked;
+  if (split) fd.append('auto_split', 'true');
+  btn.disabled = true; btn.textContent = 'Transcribing… (auto-split if >30s)';
+  log('POST /v1/audio/transcriptions model='+document.getElementById('trmodel').value+' file='+f.name+' split='+split);
+  const t0 = Date.now();
+  try {
+    const r = await fetch('/v1/audio/transcriptions',{method:'POST',body:fd});
+    const j = await r.json();
+    if(!r.ok){ log('ERROR '+r.status+': '+JSON.stringify(j).slice(0,500)); alert('Error '+r.status); return; }
+    const secs = ((Date.now()-t0)/1000).toFixed(1);
+    document.getElementById('txtout').textContent = '['+(j.language||'?')+' · '+(j.engine||'?')+' · '+secs+'s]\n'+(j.text||'(empty)');
+    log('transcribed in '+secs+'s engine='+(j.engine||'?'));
+  } catch(e){ log('ERROR: '+e); } finally { btn.disabled=false; btn.textContent='Transcribe'; refresh(); }
+}
+async function generateCap(){
+  const btn = document.getElementById('btnCap');
+  const f = document.getElementById('capimg').files[0];
+  if(!f){ alert('Pick an image'); return; }
+  const body = { image: await fileToB64(f),
+    prompt: document.getElementById('prompt4').value.trim() || 'Describe the image in detail.',
+    request_id: rid() };
+  btn.disabled = true; btn.textContent = 'Captioning… (loads VLM on first use)';
+  const t0 = Date.now();
+  try {
+    const r = await fetch('/v1/images/caption',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+    const j = await r.json();
+    if(!r.ok){ log('ERROR '+r.status+': '+JSON.stringify(j).slice(0,500)); alert('Error '+r.status); return; }
+    const secs = ((Date.now()-t0)/1000).toFixed(1);
+    document.getElementById('capout').textContent = '['+(j.engine||'?')+' · '+secs+'s]\n'+(j.text||'(empty)');
+    log('caption done in '+secs+'s engine='+(j.engine||'?'));
+  } catch(e){ log('ERROR: '+e); } finally { btn.disabled=false; btn.textContent='Caption'; refresh(); }
+}
+refresh();
+try {
+  for (const id of ['model','prompt','prompt2','prompt3','size','size2','quality','quality2']) {
+    const el = document.getElementById(id);
+    const saved = localStorage.getItem('u_'+id);
+    if (saved !== null && el) el.value = saved;
+    if (el) el.addEventListener('change', () => { localStorage.setItem('u_'+id, el.value); if(id==='model') async function runTool(){
+  const btn = document.getElementById('btnTool');
+  const f = document.getElementById('toolfile').files[0];
+  if(!f){ alert('Pick a file'); return; }
+  const op = document.getElementById('toolop').value;
+  const fd = new FormData();
+  fd.append('file', f);
+  if(op==='convert-video'){ fd.append('preset','mp4-h264'); }
+  if(op==='convert-audio'){ fd.append('preset','mp3-128'); }
+  if(op==='trim'){ fd.append('start','0'); fd.append('end','10'); }
+  if(op==='compress'){ fd.append('target_size_mb','10'); }
+  btn.disabled = true; btn.textContent = 'Processing...';
+  const t0 = Date.now();
+  try {
+    const r = await fetch('/v1/ffmpeg/'+op,{method:'POST',body:fd});
+    const j = await r.json();
+    if(!r.ok){ log('ERROR '+r.status+': '+JSON.stringify(j).slice(0,500)); alert('Error '+r.status); return; }
+    const secs = ((Date.now()-t0)/1000).toFixed(1);
+    if(j.file){
+      const a = document.createElement('a');
+      a.href = 'data:application/octet-stream;base64,'+j.file;
+      a.download = j.filename||'output';
+      a.click();
+      log('done in '+secs+'s -> '+ (j.filename||'output'));
+    } else if(j.info){
+      document.getElementById('toolout').textContent = JSON.stringify(j.info,null,2);
+      log('info fetched in '+secs+'s');
+    }
+  } catch(e){ log('ERROR: '+e); } finally { btn.disabled=false; btn.textContent='Run'; refresh(); }
+}
+
+// ---------- models (install/uninstall) ----------
+let CATALOG = [];
+async function loadCatalog(){
+  try {
+    const r = await fetch('/v1/models/catalog');
+    const j = await r.json();
+    CATALOG = j.models || [];
+    renderCatalog();
+  } catch(e){ log('catalog error: '+e); }
+}
+function fmtGb(x){ return (x||0).toFixed(2)+' GB'; }
+function renderCatalog(){
+  const box = document.getElementById('modelList');
+  box.innerHTML = '';
+  for (const m of CATALOG) {
+    const row = document.createElement('div');
+    row.style.cssText = 'padding:8px 0;border-bottom:1px solid #262b33';
+    const state = m.installed ? 'INSTALLED' : (m.install_state==='downloading' ? 'DOWNLOADING '+m.install_progress+'%' : (m.install_state==='error' ? 'ERROR' : 'not installed'));
+    const color = m.installed ? '#7ee787' : (m.install_state==='error' ? '#ff7b72' : '#d29922');
+    row.innerHTML = '<div style="display:flex;gap:8px;align-items:center">'
+      + '<div style="flex:1"><b style="font-size:13px">'+m.id+'</b>'
+      + '<div style="font-size:11px;color:#7d8590">'+m.kind+' · '+fmtGb(m.size_gb)+' · <span style="color:'+color+'">'+state+'</span></div>'
+      + '<div style="font-size:11px;color:#7d8590;word-break:break-all">'+m.label+'</div></div>';
+    const btn = document.createElement('button');
+    btn.className = 'go';
+    btn.style.cssText = 'margin:0;width:120px;padding:6px;font-size:12px;'+(m.installed?'background:#da3633':'background:#238636');
+    btn.textContent = m.installed ? 'Uninstall' : (m.install_state==='downloading' ? 'Installing…' : 'Install');
+    btn.disabled = m.install_state === 'downloading';
+    btn.onclick = () => m.installed ? uninstallModel(m.id) : installModel(m.id);
+    row.appendChild(btn);
+    row.innerHTML += '</div>';
+    if (m.install_state === 'downloading') {
+      const bar = document.createElement('div');
+      bar.style.cssText = 'height:4px;background:#262b33;border-radius:2px;margin-top:6px';
+      bar.innerHTML = '<div style="height:4px;width:'+(m.install_progress||2)+'%;background:#2f81f7;border-radius:2px"></div>';
+      row.appendChild(bar);
+    }
+    box.appendChild(row);
+  }
+}
+async function installModel(id){
+  log('install '+id+'…');
+  try {
+    const r = await fetch('/v1/models/install',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({id})});
+    const j = await r.json();
+    if(!r.ok){ log('ERROR '+r.status+': '+JSON.stringify(j)); alert(JSON.stringify(j)); return; }
+    pollCatalog();
+  } catch(e){ log('install error: '+e); }
+}
+async function uninstallModel(id){
+  if(!confirm('Uninstall '+id+'? Files will be deleted.')) return;
+  log('uninstall '+id+'…');
+  try {
+    const r = await fetch('/v1/models/uninstall',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({id})});
+    const j = await r.json();
+    if(!r.ok){ log('ERROR '+r.status+': '+JSON.stringify(j)); alert(JSON.stringify(j)); return; }
+    log('removed '+id);
+    loadCatalog();
+  } catch(e){ log('uninstall error: '+e); }
+}
+async function installMissing(){
+  for (const m of CATALOG) {
+    if (!m.installed && m.install_state !== 'downloading') await installModel(m.id);
+  }
+}
+let catalogTimer = null;
+function pollCatalog(){
+  loadCatalog();
+  clearTimeout(catalogTimer);
+  catalogTimer = setTimeout(() => {
+    if (CATALOG.some(m => m.install_state === 'downloading')) pollCatalog();
+  }, 3000);
+}
+
+// ---------- settings ----------
+async function loadSettings(){
+  try {
+    const r = await fetch('/v1/settings');
+    const j = await r.json();
+    const e = j.engines || {};
+    document.getElementById('settingsBox').textContent =
+      'version: '+j.version+'\n'
+      + 'port: '+j.port+'\n'
+      + 'whisper fallback: '+j.whisper_url+'\n'
+      + 'models dir: '+j.models_dir+'\n'
+      + 'output dir: '+j.output_dir+'\n'
+      + 'default image model: '+j.default_image_model+'\n'
+      + 'audio models: '+(j.audio_models||[]).join(', ')+'\n\n'
+      + 'engines:\n'
+      + '  torch: '+(e.torch?'yes':'no')+'  cuda: '+(e.cuda?'yes':'no')+'\n'
+      + '  ffmpeg: '+(e.ffmpeg||'not found')+'\n'
+      + '  ffprobe: '+(e.ffprobe||'not found')+'\n'
+      + '  yt-dlp: '+(e.ytdlp||'not installed (pip install yt-dlp)');
+  } catch(e){
+    document.getElementById('settingsBox').textContent = 'settings error: '+e;
+  }
+}
+refresh(); });
+  }
+} catch(e){}
+</script>
+</body>
+</html>
