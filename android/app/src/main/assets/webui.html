@@ -405,13 +405,7 @@ async function generateCap(){
     log('caption done in '+secs+'s engine='+(j.engine||'?'));
   } catch(e){ log('ERROR: '+e); } finally { btn.disabled=false; btn.textContent='Caption'; refresh(); }
 }
-refresh();
-try {
-  for (const id of ['model','prompt','prompt2','prompt3','size','size2','quality','quality2']) {
-    const el = document.getElementById(id);
-    const saved = localStorage.getItem('u_'+id);
-    if (saved !== null && el) el.value = saved;
-    if (el) el.addEventListener('change', () => { localStorage.setItem('u_'+id, el.value); if(id==='model') async function runTool(){
+async function runTool(){
   const btn = document.getElementById('btnTool');
   const f = document.getElementById('toolfile').files[0];
   if(!f){ alert('Pick a file'); return; }
@@ -434,7 +428,7 @@ try {
       a.href = 'data:application/octet-stream;base64,'+j.file;
       a.download = j.filename||'output';
       a.click();
-      log('done in '+secs+'s -> '+ (j.filename||'output'));
+      log('done in '+secs+'s -> '+(j.filename||'output'));
     } else if(j.info){
       document.getElementById('toolout').textContent = JSON.stringify(j.info,null,2);
       log('info fetched in '+secs+'s');
@@ -442,106 +436,17 @@ try {
   } catch(e){ log('ERROR: '+e); } finally { btn.disabled=false; btn.textContent='Run'; refresh(); }
 }
 
-// ---------- models (install/uninstall) ----------
-let CATALOG = [];
-async function loadCatalog(){
-  try {
-    const r = await fetch('/v1/models/catalog');
-    const j = await r.json();
-    CATALOG = j.models || [];
-    renderCatalog();
-  } catch(e){ log('catalog error: '+e); }
-}
-function fmtGb(x){ return (x||0).toFixed(2)+' GB'; }
-function renderCatalog(){
-  const box = document.getElementById('modelList');
-  box.innerHTML = '';
-  for (const m of CATALOG) {
-    const row = document.createElement('div');
-    row.style.cssText = 'padding:8px 0;border-bottom:1px solid #262b33';
-    const state = m.installed ? 'INSTALLED' : (m.install_state==='downloading' ? 'DOWNLOADING '+m.install_progress+'%' : (m.install_state==='error' ? 'ERROR' : 'not installed'));
-    const color = m.installed ? '#7ee787' : (m.install_state==='error' ? '#ff7b72' : '#d29922');
-    row.innerHTML = '<div style="display:flex;gap:8px;align-items:center">'
-      + '<div style="flex:1"><b style="font-size:13px">'+m.id+'</b>'
-      + '<div style="font-size:11px;color:#7d8590">'+m.kind+' · '+fmtGb(m.size_gb)+' · <span style="color:'+color+'">'+state+'</span></div>'
-      + '<div style="font-size:11px;color:#7d8590;word-break:break-all">'+m.label+'</div></div>';
-    const btn = document.createElement('button');
-    btn.className = 'go';
-    btn.style.cssText = 'margin:0;width:120px;padding:6px;font-size:12px;'+(m.installed?'background:#da3633':'background:#238636');
-    btn.textContent = m.installed ? 'Uninstall' : (m.install_state==='downloading' ? 'Installing…' : 'Install');
-    btn.disabled = m.install_state === 'downloading';
-    btn.onclick = () => m.installed ? uninstallModel(m.id) : installModel(m.id);
-    row.appendChild(btn);
-    row.innerHTML += '</div>';
-    if (m.install_state === 'downloading') {
-      const bar = document.createElement('div');
-      bar.style.cssText = 'height:4px;background:#262b33;border-radius:2px;margin-top:6px';
-      bar.innerHTML = '<div style="height:4px;width:'+(m.install_progress||2)+'%;background:#2f81f7;border-radius:2px"></div>';
-      row.appendChild(bar);
-    }
-    box.appendChild(row);
-  }
-}
-async function installModel(id){
-  log('install '+id+'…');
-  try {
-    const r = await fetch('/v1/models/install',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({id})});
-    const j = await r.json();
-    if(!r.ok){ log('ERROR '+r.status+': '+JSON.stringify(j)); alert(JSON.stringify(j)); return; }
-    pollCatalog();
-  } catch(e){ log('install error: '+e); }
-}
-async function uninstallModel(id){
-  if(!confirm('Uninstall '+id+'? Files will be deleted.')) return;
-  log('uninstall '+id+'…');
-  try {
-    const r = await fetch('/v1/models/uninstall',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({id})});
-    const j = await r.json();
-    if(!r.ok){ log('ERROR '+r.status+': '+JSON.stringify(j)); alert(JSON.stringify(j)); return; }
-    log('removed '+id);
-    loadCatalog();
-  } catch(e){ log('uninstall error: '+e); }
-}
-async function installMissing(){
-  for (const m of CATALOG) {
-    if (!m.installed && m.install_state !== 'downloading') await installModel(m.id);
-  }
-}
-let catalogTimer = null;
-function pollCatalog(){
-  loadCatalog();
-  clearTimeout(catalogTimer);
-  catalogTimer = setTimeout(() => {
-    if (CATALOG.some(m => m.install_state === 'downloading')) pollCatalog();
-  }, 3000);
-}
-
-// ---------- settings ----------
-async function loadSettings(){
-  try {
-    const r = await fetch('/v1/settings');
-    const j = await r.json();
-    const e = j.engines || {};
-    document.getElementById('settingsBox').textContent =
-      'version: '+j.version+'\n'
-      + 'port: '+j.port+'\n'
-      + 'whisper fallback: '+j.whisper_url+'\n'
-      + 'models dir: '+j.models_dir+'\n'
-      + 'output dir: '+j.output_dir+'\n'
-      + 'default image model: '+j.default_image_model+'\n'
-      + 'audio models: '+(j.audio_models||[]).join(', ')+'\n\n'
-      + 'engines:\n'
-      + '  torch: '+(e.torch?'yes':'no')+'  cuda: '+(e.cuda?'yes':'no')+'\n'
-      + '  ffmpeg: '+(e.ffmpeg||'not found')+'\n'
-      + '  ffprobe: '+(e.ffprobe||'not found')+'\n'
-      + '  yt-dlp: '+(e.ytdlp||'not installed (pip install yt-dlp)');
-  } catch(e){
-    document.getElementById('settingsBox').textContent = 'settings error: '+e;
-  }
-}
-refresh(); });
+refresh();
+try {
+  for (const id of ['model','prompt','prompt2','prompt3','size','size2','quality','quality2']) {
+    const el = document.getElementById(id);
+    const saved = localStorage.getItem('u_'+id);
+    if (saved !== null && el) el.value = saved;
+    if (el) el.addEventListener('change', () => { localStorage.setItem('u_'+id, el.value); if(id==='model') refresh(); });
   }
 } catch(e){}
+
+
 </script>
 </body>
 </html>
