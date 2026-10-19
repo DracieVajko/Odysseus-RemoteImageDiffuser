@@ -66,7 +66,7 @@ def cmd_health(_):
         print(json.dumps(json.loads(r.read().decode()), indent=1))
 
 
-def cmd_models(_):
+def cmd_catalog_models(_):
     with urllib.request.urlopen(SERVER + "/v1/models", timeout=15) as r:
         m = json.loads(r.read().decode())
     for d in m.get("data", []):
@@ -200,13 +200,72 @@ def cmd_caption(a):
     print(b.get("text", ""))
 
 
+def cmd_models(_):
+    from unified.models_manager import catalog
+    rows = catalog()
+    print(f"{'ID':<28} {'KIND':<9} {'SIZE':>9}  {'INSTALLED':<10} LABEL")
+    for m in rows:
+        print(f"{m['id']:<28} {m['kind']:<9} {m['size_gb']:>7.2f}GB  "
+              f"{('yes' if m['installed'] else 'no'):<10} {m['label'][:60]}")
+    missing = [m['id'] for m in rows if not m['installed']]
+    print("\nmissing:", ", ".join(missing) if missing else "(none)")
+
+
+def cmd_install(a):
+    from unified.models_manager import install_blocking, catalog
+    for mid in a.ids:
+        print(f"[{mid}] installing…", flush=True)
+        try:
+            res = install_blocking(mid)
+        except KeyError as e:
+            print(f"[{mid}] unknown model id: {e}")
+            continue
+        state = res["state"]
+        print(f"[{mid}] {state} installed={res['installed']}"
+              + (f" error={res['error']}" if res.get("error") else ""))
+        if state == "error":
+            sys.exit(1)
+
+
+def cmd_uninstall(a):
+    from unified.models_manager import uninstall
+    for mid in a.ids:
+        try:
+            res = uninstall(mid)
+            print(f"[{mid}] removed={res['removed']}")
+        except KeyError as e:
+            print(f"[{mid}] unknown model id: {e}")
+        except ValueError as e:
+            print(f"[{mid}] refused: {e}")
+
+
+def cmd_status(_):
+    import json as _json
+    try:
+        with urllib.request.urlopen(SERVER + "/health", timeout=10) as r:
+            h = _json.loads(r.read().decode())
+        print("server:", h.get("status"), "| device:", h.get("device"),
+              "| loaded:", h.get("current_model") or h.get("model") or "none")
+    except Exception as e:
+        print("server: UNREACHABLE", str(e)[:100])
+    try:
+        with urllib.request.urlopen(SERVER + "/v1/models/catalog", timeout=10) as r:
+            cat = _json.loads(r.read().decode()).get("models", [])
+        inst = [m["id"] for m in cat if m["installed"]]
+        miss = [m["id"] for m in cat if not m["installed"]]
+        print("installed models:", ", ".join(inst) if inst else "(none)")
+        print("missing models  :", ", ".join(miss) if miss else "(none)")
+    except Exception as e:
+        print("catalog: UNREACHABLE", str(e)[:100])
+
+
 def main():
     ap = argparse.ArgumentParser(description="DiffusionServer CLI")
     ap.add_argument("--server", default="http://127.0.0.1:8101")
     sub = ap.add_subparsers(dest="cmd", required=True)
 
     sub.add_parser("health")
-    sub.add_parser("models")
+    sub.add_parser("server-models", help="list models loaded/registered on the running server")
     sub.add_parser("doctor")
 
     p = sub.add_parser("txt2img")
@@ -250,13 +309,21 @@ def main():
     p.add_argument("--prompt", default="Describe the image in detail.")
     p.add_argument("--max_tokens", type=int, default=256)
 
+    p = sub.add_parser("models", help="list model catalog with installed status")
+    p = sub.add_parser("install", help="install model(s) by id")
+    p.add_argument("ids", nargs="+")
+    p = sub.add_parser("uninstall", help="uninstall model(s) by id")
+    p.add_argument("ids", nargs="+")
+    p = sub.add_parser("status", help="server + models status")
+
     a = ap.parse_args()
     global SERVER
     SERVER = a.server.rstrip("/")
-    {"health": cmd_health, "models": cmd_models, "doctor": cmd_doctor,
+    {"health": cmd_health, "models": cmd_models, "server-models": cmd_catalog_models, "doctor": cmd_doctor,
      "txt2img": cmd_txt2img, "img2img": cmd_img2img, "inpaint": cmd_inpaint,
      "upscale": cmd_upscale, "transcribe": cmd_transcribe,
-     "caption": cmd_caption}[a.cmd](a)
+     "caption": cmd_caption, "install": cmd_install, "uninstall": cmd_uninstall,
+     "status": cmd_status}[a.cmd](a)
 
 
 if __name__ == "__main__":

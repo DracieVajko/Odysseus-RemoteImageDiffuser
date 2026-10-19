@@ -931,6 +931,78 @@ async def media_info_endpoint(
             pass
 
 
+
+
+# ---------- model install/uninstall (PC) ----------
+
+from unified import models_manager as _mm
+
+
+class InstallRequest(BaseModel):
+    id: str = ""
+
+
+@app.get("/v1/models/catalog")
+def models_catalog():
+    """Katalóg inštalovateľných modelov + stav (installed/downloading/…)."""
+    try:
+        return {"models": _mm.catalog()}
+    except Exception as e:
+        return JSONResponse(status_code=500, content={"error": str(e)[:200]})
+
+
+@app.post("/v1/models/install")
+def models_install(req: InstallRequest):
+    try:
+        return _mm.start_install(req.id)
+    except KeyError as e:
+        return JSONResponse(status_code=404, content={"error": str(e).strip("'")})
+
+
+@app.post("/v1/models/uninstall")
+def models_uninstall(req: InstallRequest):
+    try:
+        return _mm.uninstall(req.id)
+    except KeyError as e:
+        return JSONResponse(status_code=404, content={"error": str(e).strip("'")})
+    except ValueError as e:
+        return JSONResponse(status_code=400, content={"error": str(e)})
+    except Exception as e:
+        return JSONResponse(status_code=500, content={"error": str(e)[:200]})
+
+
+
+
+@app.get("/v1/settings")
+def settings_info():
+    """Runtime info pre WebUI Settings tab (read-only, žiadne tajomstvá)."""
+    import shutil as _sh
+    torch_ok = False
+    cuda = False
+    try:
+        import torch
+        torch_ok = True
+        cuda = torch.cuda.is_available()
+    except Exception:
+        pass
+    return {
+        "version": "unified-0.1.0",
+        "port": 8101,
+        "whisper_url": WHISPER_SERVICE_URL,
+        "models_dir": str(HERE / "models"),
+        "output_dir": str(HERE / "output"),
+        "default_image_model": _image_registry().get("default_image_model", ""),
+        "audio_models": list(ALLOWED_WHISPER),
+        "engines": {
+            "torch": torch_ok,
+            "cuda": cuda,
+            "ffmpeg": _sh.which("ffmpeg") or "",
+            "ffprobe": _sh.which("ffprobe") or "",
+            "ytdlp": _sh.which("yt-dlp") or "",
+        },
+    }
+
+
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run("unified_server:app", host="127.0.0.1", port=8101, workers=1)

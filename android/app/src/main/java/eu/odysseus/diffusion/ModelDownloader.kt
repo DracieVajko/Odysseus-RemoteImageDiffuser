@@ -188,6 +188,25 @@ class ModelDownloader(private val ctx: Context) {
         }
     }
 
+    /**
+     * Odinštaluje model: zmaže models/<id>/ a <id>.READY.
+     * Vráti true, ak po operácii nezostali žiadne dáta modelu.
+     */
+    fun uninstall(assetId: String): Boolean {
+        val dir = modelDir(assetId)
+        if (dir.exists()) dir.deleteRecursively()
+        val marker = File(modelsDir(), "$assetId.READY")
+        if (marker.exists()) marker.delete()
+        return !dir.exists() && !marker.exists()
+    }
+
+    /** Veľkosť nainštalovaného modelu v MB (0 = nič). */
+    fun installedSizeMb(assetId: String): Long {
+        val dir = modelDir(assetId)
+        if (!dir.exists()) return 0
+        return dir.walkTopDown().filter { it.isFile }.sumOf { it.length() } / (1024 * 1024)
+    }
+
     private fun calculateSha256(file: File): String {
         val digest = MessageDigest.getInstance("SHA-256")
         file.inputStream().use { input ->

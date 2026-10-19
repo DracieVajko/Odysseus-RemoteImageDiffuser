@@ -13,7 +13,9 @@ object WhisperLib {
 
     init {
         try {
-            System.loadLibrary("whisper")
+            // Náš JNI most (libwhisper_jni.so) — whisper.cpp samotný je libwhisper.so
+            // a načíta sa automaticky cez DT_NEEDED.
+            System.loadLibrary("whisper_jni")
             isNativeLoaded = true
         } catch (e: UnsatisfiedLinkError) {
             isNativeLoaded = false

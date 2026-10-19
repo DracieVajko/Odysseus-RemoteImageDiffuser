@@ -1,8 +1,9 @@
-# Náš JNI most (whisper_jni.cpp) + whisper.cpp ako statická knižnica.
+# Náš JNI most (whisper_jni.cpp) + whisper.cpp ako knižnica.
 #
-# whisper.cpp zdrojáky NIE sú v gite (android/app/src/main/cpp/third_party/,
-# klonuje fetch skript) — tu len tenký most nad stabilným C API, ktorý
-# plne rozumieme: init_from_file / full / segments / free.
+# DÔLEŽITÉ: whisper.cpp sa v tomto builde zostavuje ako SHARED (BUILD_SHARED_LIBS
+# zapnuté AGP), takže jeho vlastný výstup je libwhisper.so. Náš JNI most preto
+# MUSÍ mať iný názov (libwhisper_jni.so), inak si navzájom prepíšu výstup a
+# Java_native symboly zmiznú.
 cmake_minimum_required(VERSION 3.22.1)
 project("odysseus-whisper")
 
@@ -14,9 +15,6 @@ set(WHISPER_CURL OFF CACHE BOOL "" FORCE)
 set(WHISPER_SDL2 OFF CACHE BOOL "" FORCE)
 add_subdirectory(third_party/whisper.cpp whispercpp-build)
 
-# Vlastný shared objekt MUSÍ mať výstup libwhisper.so
-# (WhisperLib.kt volá System.loadLibrary("whisper")), ale cieľ sa nemôže
-# volať "whisper" — to meno už má statická knižnica whisper.cpp.
 add_library(odysseus_whisper_jni SHARED whisper_jni.cpp)
-set_target_properties(odysseus_whisper_jni PROPERTIES OUTPUT_NAME "whisper")
+set_target_properties(odysseus_whisper_jni PROPERTIES OUTPUT_NAME "whisper_jni")
 target_link_libraries(odysseus_whisper_jni PRIVATE whisper log)

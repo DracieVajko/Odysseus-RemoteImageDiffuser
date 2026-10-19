@@ -21,6 +21,11 @@ import io.ktor.http.content.forEachPart
 import io.ktor.utils.io.core.readBytes
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonNull
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
 import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
 
@@ -125,6 +130,23 @@ data class JobProgress(
     var percent: Int = 0,
 )
 
+/** Bezpečná JSON odpoveď: Map<String, Any> kotlinx-serialization nevie
+ *  serializovať (Any nemá serializer) a Ktor potom vráti tichý 500.
+ *  jsonOf() rekurzívne prevedie Map/List/primitívy na JsonElement. */
+fun anyToJson(v: Any?): JsonElement = when (v) {
+    null -> JsonNull
+    is JsonElement -> v
+    is Boolean -> JsonPrimitive(v)
+    is Number -> JsonPrimitive(v)
+    is String -> JsonPrimitive(v)
+    is Map<*, *> -> JsonObject(v.entries.associate { (k, vv) -> k.toString() to anyToJson(vv) })
+    is Iterable<*> -> JsonArray(v.map { anyToJson(it) })
+    else -> JsonPrimitive(v.toString())
+}
+
+fun jsonOf(vararg pairs: Pair<String, Any?>): JsonObject =
+    JsonObject(pairs.associate { (k, v) -> k to anyToJson(v) })
+
 class ApiServer(
     private val manager: ModelManager,
     private val downloader: ModelDownloader,
@@ -133,7 +155,9 @@ class ApiServer(
     private var engine: NettyApplicationEngine? = null
 
     fun start(wait: Boolean = false): NettyApplicationEngine {
-        val eng = embeddedServer(Netty, port = SERVER_PORT) { module() }
+        // Explicit 0.0.0.0: default bind may be IPv6-only ([::]), ktorý adb forward
+        // (IPv4 127.0.0.1) nevie dosiahnuť — requesty potom visia/500.
+        val eng = embeddedServer(Netty, host = "0.0.0.0", port = SERVER_PORT) { module() }
         engine = eng
         eng.start(wait = wait)
         return eng
@@ -149,10 +173,17 @@ class ApiServer(
             json(Json { ignoreUnknownKeys = true; explicitNulls = false })
         }
         install(StatusPages) {
+            exception<Throwable> { call, e ->
+                android.util.Log.e("ApiServer", "unhandled: " + e.message, e)
+                call.respond(
+                    HttpStatusCode.InternalServerError,
+                    jsonOf("error" to (e.message ?: e.javaClass.simpleName)),
+                )
+            }
             exception<ModelLoadingError> { call, e ->
                 call.respond(
                     HttpStatusCode.ServiceUnavailable,
-                    mapOf(
+                    jsonOf(
                         "error" to "loading model",
                         "loading_model" to e.loadingModel,
                         "retry_after" to e.retryAfterSec,
@@ -162,7 +193,7 @@ class ApiServer(
             exception<ModelWillNotLoadError> { call, e ->
                 call.respond(
                     HttpStatusCode.ServiceUnavailable,
-                    mapOf(
+                    jsonOf(
                         "error" to "will not load",
                         "reason" to e.reason,
                         "needed_mb" to e.neededMb,
@@ -175,7 +206,7 @@ class ApiServer(
             get("/health") {
                 val st = manager.status()
                 call.respond(
-                    mapOf(
+                    jsonOf(
                         "status" to "ok",
                         "model" to (st.loadedId ?: ""),
                         "current_model" to (st.loadedId ?: ""),
@@ -191,16 +222,16 @@ class ApiServer(
             get("/v1/models") {
                 val st = manager.status()
                 call.respond(
-                    mapOf(
+                    jsonOf(
                         "data" to listOf(
-                            mapOf(
+                            jsonOf(
                                 "id" to "lcm-dreamshaper-int8",
                                 "object" to "model",
                                 "owned_by" to "odysseus-local",
                                 "available" to downloader.isReady("lcm-dreamshaper-int8"),
                                 "guessed" to false,
                             ),
-                            mapOf(
+                            jsonOf(
                                 "id" to "whisper-small-q5_1",
                                 "object" to "model",
                                 "owned_by" to "odysseus-local",
@@ -219,10 +250,10 @@ class ApiServer(
                 val id = call.parameters["id"] ?: ""
                 val j = progress[id]
                 if (j == null) {
-                    call.respond(mapOf("id" to id, "status" to "unknown", "step" to 0, "total" to 0, "percent" to 0))
+                    call.respond(jsonOf("id" to id, "status" to "unknown", "step" to 0, "total" to 0, "percent" to 0))
                 } else {
                     call.respond(
-                        mapOf(
+                        jsonOf(
                             "id" to j.id,
                             "status" to j.status.name.lowercase(),
                             "step" to j.step,
@@ -235,15 +266,15 @@ class ApiServer(
             post("/v1/images/generations") {
                 val req = call.receive<GenerationReq>()
                 if (req.n !in 1..4) {
-                    call.respond(HttpStatusCode.BadRequest, mapOf("error" to "n must be 1..4"))
+                    call.respond(HttpStatusCode.BadRequest, jsonOf("error" to "n must be 1..4"))
                     return@post
                 }
                 val (w, h) = parseSize(req.size) ?: run {
-                    call.respond(HttpStatusCode.BadRequest, mapOf("error" to "bad size, expected WxH"))
+                    call.respond(HttpStatusCode.BadRequest, jsonOf("error" to "bad size, expected WxH"))
                     return@post
                 }
                 if (maxOf(w, h) > MAX_CANVAS_PX) {
-                    call.respond(HttpStatusCode.BadRequest, mapOf("error" to "canvas too large"))
+                    call.respond(HttpStatusCode.BadRequest, jsonOf("error" to "canvas too large"))
                     return@post
                 }
                 val rid = req.request_id.ifEmpty { UUID.randomUUID().toString() }
@@ -258,9 +289,9 @@ class ApiServer(
                 job.step = steps
                 job.percent = 100
                 call.respond(
-                    mapOf(
+                    jsonOf(
                         "created" to System.currentTimeMillis() / 1000,
-                        "data" to List(req.n) { mapOf("b64_json" to STUB_PNG_B64) },
+                        "data" to List(req.n) { jsonOf("b64_json" to STUB_PNG_B64) },
                         "request_id" to rid,
                     ),
                 )
@@ -293,11 +324,11 @@ class ApiServer(
                     part.dispose()
                 }
                 if (!hasImage) {
-                    call.respond(HttpStatusCode.BadRequest, mapOf("error" to "missing image part"))
+                    call.respond(HttpStatusCode.BadRequest, jsonOf("error" to "missing image part"))
                     return@post
                 }
                 if (n !in 1..4) {
-                    call.respond(HttpStatusCode.BadRequest, mapOf("error" to "n must be 1..4"))
+                    call.respond(HttpStatusCode.BadRequest, jsonOf("error" to "n must be 1..4"))
                     return@post
                 }
                 val rid = requestId.ifEmpty { UUID.randomUUID().toString() }
@@ -310,9 +341,9 @@ class ApiServer(
                 val unused = prompt + size
                 // TODO(NCNN): img2img strength 0.1..1 clamp, Vulkan path.
                 call.respond(
-                    mapOf(
+                    jsonOf(
                         "created" to System.currentTimeMillis() / 1000,
-                        "data" to List(n) { mapOf("b64_json" to STUB_PNG_B64) },
+                        "data" to List(n) { jsonOf("b64_json" to STUB_PNG_B64) },
                         "request_id" to rid,
                     ),
                 )
@@ -320,7 +351,7 @@ class ApiServer(
             post("/v1/images/inpaint") {
                 val req = call.receive<InpaintReq>()
                 if (req.image.isEmpty() || req.mask.isEmpty()) {
-                    call.respond(HttpStatusCode.BadRequest, mapOf("error" to "image and mask required (base64)"))
+                    call.respond(HttpStatusCode.BadRequest, jsonOf("error" to "image and mask required (base64)"))
                     return@post
                 }
                 if (maxOf(req.width, req.height) > MAX_CANVAS_PX) {
@@ -334,12 +365,12 @@ class ApiServer(
                 val job = JobProgress(rid, JobState.DONE, steps, steps, 100)
                 progress[rid] = job
                 // TODO(NCNN): mask blur feather + inpaint pipeline.
-                call.respond(mapOf("image" to STUB_PNG_B64, "elapsed" to 0.0, "request_id" to rid))
+                call.respond(jsonOf("image" to STUB_PNG_B64, "elapsed" to 0.0, "request_id" to rid))
             }
             post("/v1/images/harmonize") {
                 val req = call.receive<HarmonizeReq>()
                 if (req.image.isEmpty()) {
-                    call.respond(HttpStatusCode.BadRequest, mapOf("error" to "image required (base64)"))
+                    call.respond(HttpStatusCode.BadRequest, jsonOf("error" to "image required (base64)"))
                     return@post
                 }
                 if (req.max_side > MAX_CANVAS_PX) {
@@ -351,28 +382,28 @@ class ApiServer(
                 val job = JobProgress(rid, JobState.DONE, 1, 1, 100)
                 progress[rid] = job
                 // TODO: color-match + seam-fix (CPU, OpenCV alebo NCNN).
-                call.respond(mapOf("image" to STUB_PNG_B64, "elapsed" to 0.0, "request_id" to rid))
+                call.respond(jsonOf("image" to STUB_PNG_B64, "elapsed" to 0.0, "request_id" to rid))
             }
             post("/v1/images/upscale") {
                 val req = call.receive<UpscaleReq>()
                 if (req.image.isEmpty()) {
-                    call.respond(HttpStatusCode.BadRequest, mapOf("error" to "image required (base64)"))
+                    call.respond(HttpStatusCode.BadRequest, jsonOf("error" to "image required (base64)"))
                     return@post
                 }
                 if (req.scale !in 2..4) {
-                    call.respond(HttpStatusCode.BadRequest, mapOf("error" to "scale must be 2..4"))
+                    call.respond(HttpStatusCode.BadRequest, jsonOf("error" to "scale must be 2..4"))
                     return@post
                 }
                 manager.ensure("upscale", req.model)
                 requireModelReady("realesrgan-x4plus-ncnn")
                 val rid = req.request_id.ifEmpty { UUID.randomUUID().toString() }
                 // TODO(NCNN): Real-ESRGAN-x4v3 tile processing (Vulkan).
-                call.respond(mapOf("image" to STUB_PNG_B64, "elapsed" to 0.0, "request_id" to rid))
+                call.respond(jsonOf("image" to STUB_PNG_B64, "elapsed" to 0.0, "request_id" to rid))
             }
             post("/v1/images/caption") {
                 val req = call.receive<CaptionReq>()
                 if (req.image.isEmpty()) {
-                    call.respond(HttpStatusCode.BadRequest, mapOf("error" to "image required (base64)"))
+                    call.respond(HttpStatusCode.BadRequest, jsonOf("error" to "image required (base64)"))
                     return@post
                 }
                 // V2 mobile: SmolVLM build neoverený (viď ModelCatalog) → 503, nie stub text.
@@ -396,6 +427,7 @@ class ApiServer(
         var bytes = ByteArray(0)
         var model = "whisper-small-q5_1"
         var language = "sk"
+        var autoSplit = true
         call.receiveMultipart().forEachPart { part ->
             when (part) {
                 is PartData.FileItem -> if (part.name == "audio" || part.name == "file") {
@@ -405,6 +437,7 @@ class ApiServer(
                 is PartData.FormItem -> when (part.name) {
                     "model" -> model = part.value
                     "language" -> language = part.value
+                    "auto_split" -> autoSplit = part.value.lowercase() in setOf("true", "1", "yes", "on")
                 }
                 else -> {}
             }
@@ -412,16 +445,16 @@ class ApiServer(
         }
         if (bytes.isEmpty()) {
             // Prázdny / zlý súbor → 400/415, nikdy 500 (kontrakt).
-            call.respond(HttpStatusCode.BadRequest, mapOf("error" to "empty audio file"))
+            call.respond(HttpStatusCode.BadRequest, jsonOf("error" to "empty audio file"))
             return
         }
         if (bytes.size > MAX_AUDIO_BYTES) {
-            call.respond(HttpStatusCode.BadRequest, mapOf("error" to "file too large (max 100 MB)"))
+            call.respond(HttpStatusCode.BadRequest, jsonOf("error" to "file too large (max 100 MB)"))
             return
         }
         val ext = filename.substringAfterLast('.', "").lowercase()
         if (ext.isNotEmpty() && ext !in ALLOWED_AUDIO_EXT) {
-            call.respond(HttpStatusCode.UnsupportedMediaType, mapOf("error" to "unsupported extension .$ext"))
+            call.respond(HttpStatusCode.UnsupportedMediaType, jsonOf("error" to "unsupported extension .$ext"))
             return
         }
         manager.ensure("audio", model) // 503 loading počas prepnutia image→audio
@@ -440,10 +473,11 @@ class ApiServer(
         )
 
         call.respond(
-            mapOf(
+            jsonOf(
                 "text" to text,
                 "language" to language,
                 "duration" to (pcmFloats.size / 16000.0),
+                "auto_split" to autoSplit,
             )
         )
     }

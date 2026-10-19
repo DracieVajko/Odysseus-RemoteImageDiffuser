@@ -1,5 +1,13 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <!-- AppCompat téma povinná pre AppCompatActivity (bez nej crash v onCreate). -->
-    <style name="Theme.Odysseus" parent="Theme.AppCompat.DayNight.NoActionBar" />
+    <!-- MaterialComponents téma: povinná pre MaterialCardView/MaterialButton
+         (AppCompat theme crashuje na ThemeEnforcement.checkMaterialTheme). -->
+    <style name="Theme.Odysseus" parent="Theme.MaterialComponents.DayNight.NoActionBar">
+        <item name="colorPrimary">#2F81F7</item>
+        <item name="colorPrimaryVariant">#1F6FEB</item>
+        <item name="colorSecondary">#238636</item>
+        <item name="android:statusBarColor">#0F1114</item>
+        <item name="android:navigationBarColor">#0F1114</item>
+        <item name="android:windowBackground">#0F1114</item>
+    </style>
 </resources>
