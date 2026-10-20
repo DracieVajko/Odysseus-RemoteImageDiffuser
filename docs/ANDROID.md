@@ -9,6 +9,27 @@ Tu len PC↔mobil wiring a research verdikty (12 GB RAM, SD 8 Gen2+).
 - **Remote:** proxy na PC `http://<pc>:8101` (LAN/Tailscale). Vhodné pre SDXL / veľké canvas.
 - **Auto:** skúsi Local, pri 503 will-not-load presmeruje na Remote.
 
+## Remote režim (mobil -> PC)
+
+Android server umí forwardovať endpointy, ktoré lokálne nevie, na PC:
+
+| Endpoint | Local | Remote/Auto |
+|---|---|---|
+| `/v1/audio/*` | ✅ whisper JNI | vždy lokálne |
+| `/v1/images/generations|edits|inpaint|harmonize` | 503 | ✅ proxy na PC |
+| `/v1/images/upscale` | 503 | ✅ proxy na PC |
+| `/v1/images/caption`, `/v1/chat/*` | 503 | ✅ proxy na PC |
+| `/v1/ffmpeg/*` | 503 | ✅ proxy na PC |
+| `/v1/models/*`, `/webui` | ✅ lokálne | ✅ lokálne |
+
+Konfigurácia: v appke vyber **Remote** (alebo Auto) a zadaj PC host
+(napr. `http://192.168.2.110:8101`). Server potom forwarduje requesty
+aj s multipart telom a vráti presne PC odpoveď (status + content-type).
+
+Overené cez adb reverse: mobil `127.0.0.1:9100` -> PC `:8200`,
+`POST /v1/images/upscale` → PC Real-ESRGAN → mobil vrátil 32×32 PNG.
+Audio zostáva lokálne aj v Remote režime (5,2 s → 5,8 s).
+
 ## Odysseus napojenie na mobil
 
 1. Mobil + PC na rovnakej LAN / Tailscale.
