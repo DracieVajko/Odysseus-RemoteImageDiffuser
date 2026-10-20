@@ -53,6 +53,35 @@ API:
 
 Uninstall má path guard: nikdy nezmaže nič mimo `models/`.
 
+### Model finder + custom modely (PC)
+
+```powershell
+python generate_image.py search dreamshaper --limit 10   # HuggingFace search
+python generate_image.py add Lykon/DreamShaper            # stiahne do models/DreamShaper
+python generate_image.py custom                          # zoznam custom adresárov
+python generate_image.py delete DreamShaper              # zmaže custom model
+```
+
+API: `GET /v1/models/find?q=`, `POST /v1/models/add {repo_id|url,name}`,
+`GET /v1/models/custom`, `POST /v1/models/delete {name}`.
+
+Pravidlá:
+- `add` s `repo_id` (diffusers snapshot) je len na PC; Android podporuje
+  single-file URL (GGUF/ONNX/safetensors) cez DownloadManager.
+- `delete` odmietne katalógové modely (na tie je `uninstall`) a cesty
+  mimo `models/`.
+
+## Lazy loading a idle unload
+
+- Štart: **žiadny model v RAM/VRAM** (`/health` → `current_model: ""`,
+  `idle_seconds: null`).
+- Prvý request model načíta (SD cold load ~1–3 min), ďalšie ho používajú.
+- Prepnutie modelu/typu = unload predchádzajúceho (single-resident).
+- Po `UNIFIED_IDLE_UNLOAD_SECONDS` (default 900 s) bez requestov sa model
+  uvoľní; počas prebiehajúceho requestu sa **nikdy** neunloaduje
+  (in-flight guard — inak by cold load > limit zabil vlastnú generáciu).
+- Diagnostika: `/health` → `idle_seconds`, `idle_unload_seconds`, `in_flight`.
+
 ## FFmpeg tools (WebUI tab Tools + CLI)
 
 ```powershell
