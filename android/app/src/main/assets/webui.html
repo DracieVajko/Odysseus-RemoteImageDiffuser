@@ -33,6 +33,12 @@ figcaption a { color: #2f81f7; }
 img.preview { max-width: 100%; border-radius: 6px; border: 1px solid #444; margin-top: 6px; }
 canvas#maskpad { width: 100%; border-radius: 6px; border: 1px solid #444; cursor: crosshair; touch-action: none; }
 #txtout { font-size: 14px; background: #0f1114; border: 1px solid #333; border-radius: 6px; padding: 10px; margin-top: 10px; white-space: pre-wrap; min-height: 40px; }
+
+@media (max-width: 520px) {
+  .tabs button { font-size: 10px; min-width: 56px; padding: 7px 2px; }
+  main { padding: 10px; }
+  .panel { padding: 10px; }
+}
 </style>
 </head>
 <body>
@@ -203,10 +209,12 @@ async function refresh(){
     const h = await (await fetch('/health')).json();
     const m = await (await fetch('/v1/models')).json();
     MODELS = m.data || [];
+    // Android vracia aj audio modely; dropdown je len pre image modely.
+    const imageModels = MODELS.filter(x => !x.kind || x.kind === 'image');
     const sel = document.getElementById('model');
     const prev = sel.value;
     sel.innerHTML = '';
-    for (const x of MODELS) {
+    for (const x of imageModels) {
       const o = document.createElement('option');
       o.value = x.id; o.textContent = x.available === false ? x.id+' (unavailable)' : x.id;
       sel.appendChild(o);
@@ -217,7 +225,7 @@ async function refresh(){
     const w = document.getElementById('warn');
     if (miss.length) { w.style.display='block'; w.textContent = 'Missing model files: '+miss.join(', ')+'.'; }
     else { w.style.display='none'; }
-    st.innerHTML = 'server <b class="ok">OK</b> · img models: '+MODELS.length+' · loaded: '+(h.current_model||h.model||'none (lazy)')
+    st.innerHTML = 'server <b class="ok">OK</b> · img models: '+imageModels.length+' · loaded: '+(h.current_model||h.model||'none (lazy)')
       +' · audio: '+(m.default_audio_model||'?')+(h.audio_loaded?' (loaded)':'')
       + (h.busy ? ' · <b class="bad">BUSY</b> (queue: '+(h.queue||0)+')' : '');
   } catch(e){ st.innerHTML = 'server <b class="bad">UNREACHABLE</b> · '+e; }
@@ -483,9 +491,10 @@ function renderCatalog(){
     btn.className = 'go';
     btn.style.cssText = 'margin:0;width:130px;padding:6px;font-size:12px;'
       + (m.installed ? 'background:#da3633' : 'background:#238636');
+    const noSource = m.has_source === false;
     btn.textContent = m.installed ? 'Uninstall'
-      : (m.install_state==='downloading' ? 'Installing…' : 'Install');
-    btn.disabled = m.install_state === 'downloading';
+      : (noSource ? 'No source' : (m.install_state==='downloading' ? 'Installing…' : 'Install'));
+    btn.disabled = m.install_state === 'downloading' || (!m.installed && noSource);
     btn.onclick = () => m.installed ? uninstallModel(m.id) : installModel(m.id);
 
     line.appendChild(info);

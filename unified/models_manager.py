@@ -79,6 +79,7 @@ def catalog() -> list:
             "install_state": st.get("state", "idle"),
             "install_progress": st.get("progress", 0),
             "install_error": st.get("error", ""),
+            "has_source": True,
         })
     return out
 

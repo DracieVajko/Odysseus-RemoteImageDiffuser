@@ -29,6 +29,7 @@ import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
+import java.io.File
 import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
 
@@ -225,28 +226,29 @@ class ApiServer(
             }
             get("/v1/models") {
                 val st = manager.status()
+                val data = ModelCatalog.assets.map { a ->
+                    jsonOf(
+                        "id" to a.id,
+                        "object" to "model",
+                        "owned_by" to "odysseus-local",
+                        "kind" to a.kind,
+                        "available" to downloader.isReady(a.id),
+                        "has_source" to a.url.isNotBlank(),
+                    )
+                }
                 call.respond(
                     jsonOf(
-                        "data" to listOf(
-                            jsonOf(
-                                "id" to "lcm-dreamshaper-int8",
-                                "object" to "model",
-                                "owned_by" to "odysseus-local",
-                                "available" to downloader.isReady("lcm-dreamshaper-int8"),
-                                "guessed" to false,
-                            ),
-                            jsonOf(
-                                "id" to "whisper-small-q5_1",
-                                "object" to "model",
-                                "owned_by" to "odysseus-local",
-                                "available" to downloader.isReady("whisper-small-q5_1"),
-                                "guessed" to false,
-                            ),
-                        ),
+                        "object" to "list",
+                        "data" to data,
                         "currently_loaded_model" to (st.loadedId ?: ""),
                         "loading" to st.loading,
                         "loading_model" to st.loadingModel,
-                        "missing_models" to ModelCatalog.assets.filter { !downloader.isReady(it.id) }.map { it.id },
+                        // warning len pre modely, ktoré MAJÚ zdroj a nie sú stiahnuté
+                        "missing_models" to ModelCatalog.assets
+                            .filter { it.url.isNotBlank() && !downloader.isReady(it.id) }
+                            .map { it.id },
+                        "default_audio_model" to "whisper-small-q5_1",
+                        "audio_models" to ModelCatalog.assets.filter { it.kind == "audio" }.map { it.id },
                     ),
                 )
             }
@@ -354,6 +356,36 @@ class ApiServer(
                     call.respondText(html, ContentType.Text.Html)
                 }
             }
+            get("/v1/models/custom") {
+                val root = downloader.modelsDir()
+                val known = ModelCatalog.assets.map { it.id }.toSet()
+                val rows = (root.listFiles() ?: emptyArray())
+                    .filter { it.isDirectory && !it.name.startsWith(".") && it.name !in known }
+                    .map { d ->
+                        val mb = d.walkTopDown().filter { f -> f.isFile }.sumOf { f -> f.length() } / (1024 * 1024)
+                        jsonOf("name" to d.name, "size_gb" to (mb / 1024.0), "path" to d.absolutePath)
+                    }
+                call.respond(jsonOf("models" to rows, "models_dir" to root.absolutePath))
+            }
+            post("/v1/models/delete") {
+                val body = call.receiveText()
+                val name = Regex("\"name\"\\s*:\\s*\"([^\"]+)\"").find(body)?.groupValues?.get(1)
+                if (name.isNullOrBlank() || name.contains("/") || name.contains("\\") || name == "..") {
+                    return@post call.respond(HttpStatusCode.BadRequest, jsonOf("error" to "invalid model name"))
+                }
+                if (ModelCatalog.assets.any { it.id == name }) {
+                    return@post call.respond(
+                        HttpStatusCode.BadRequest,
+                        jsonOf("error" to "catalog model: use uninstall instead"),
+                    )
+                }
+                val dir = File(downloader.modelsDir(), name)
+                if (!dir.isDirectory) {
+                    return@post call.respond(HttpStatusCode.NotFound, jsonOf("error" to "model not found: $name"))
+                }
+                val ok = dir.deleteRecursively()
+                call.respond(jsonOf("name" to name, "removed" to ok))
+            }
             get("/v1/models/catalog") {
                 val rows = ModelCatalog.assets.map { a ->
                     jsonOf(
@@ -366,6 +398,7 @@ class ApiServer(
                         "install_state" to if (downloader.isReady(a.id)) "done" else "idle",
                         "install_progress" to 0,
                         "url" to a.url,
+                        "has_source" to a.url.isNotBlank(),
                     )
                 }
                 call.respond(jsonOf("models" to rows))
