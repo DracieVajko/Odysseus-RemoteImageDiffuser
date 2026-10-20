@@ -326,6 +326,51 @@ def cmd_presets(_):
     print(_json.dumps(get_presets(), indent=2))
 
 
+def cmd_search(a):
+    from unified.model_finder import search_hf
+    res = search_hf(a.query, limit=a.limit, filter_task=a.task or "")
+    print(f"{'ID':<52} {'DOWNLOADS':>9} {'LIKES':>6}  PIPELINE")
+    for m in res["models"]:
+        print(f"{m['id']:<52} {m['downloads']:>9} {m['likes']:>6}  {m['pipeline_tag'] or m['library']}")
+    print(f"\n{res['count']} results")
+
+
+def cmd_add(a):
+    from unified.model_finder import start_add, add_state
+    import time as _t
+    res = start_add(a.repo_id, a.name)
+    name = res.get("id", a.name)
+    print(f"adding {a.repo_id} -> models/{name} …", flush=True)
+    while True:
+        st = add_state(name)
+        if st.get("state") != "downloading":
+            print(f"state={st.get('state')}" + (f" error={st.get('error')}" if st.get("error") else ""))
+            if st.get("state") == "error":
+                sys.exit(1)
+            return
+        _t.sleep(3)
+
+
+def cmd_custom(_):
+    from unified.model_finder import custom_models
+    res = custom_models()
+    if not res["models"]:
+        print("no custom models")
+        return
+    for m in res["models"]:
+        print(f"{m['name']:<32} {m['size_gb']:>7.2f} GB  {m['path']}")
+
+
+def cmd_delete(a):
+    from unified.model_finder import delete_custom
+    try:
+        res = delete_custom(a.name)
+        print(f"deleted {res['name']} removed={res['removed']}")
+    except (KeyError, ValueError) as e:
+        print(f"refused: {e}")
+        sys.exit(1)
+
+
 def main():
     ap = argparse.ArgumentParser(description="DiffusionServer CLI")
     ap.add_argument("--server", default="http://127.0.0.1:8101")
@@ -419,6 +464,20 @@ def main():
 
     sub.add_parser("presets", help="list ffmpeg presets as JSON")
 
+    p = sub.add_parser("search", help="search HuggingFace for models")
+    p.add_argument("query")
+    p.add_argument("--limit", type=int, default=15)
+    p.add_argument("--task", default="")
+
+    p = sub.add_parser("add", help="add a custom model from HuggingFace (owner/name)")
+    p.add_argument("repo_id")
+    p.add_argument("--name", default="")
+
+    sub.add_parser("custom", help="list custom model directories")
+
+    p = sub.add_parser("delete", help="delete a custom model directory")
+    p.add_argument("name")
+
     a = ap.parse_args()
     global SERVER
     SERVER = a.server.rstrip("/")
@@ -428,7 +487,9 @@ def main():
      "caption": cmd_caption, "install": cmd_install, "uninstall": cmd_uninstall,
      "status": cmd_status, "video": cmd_video, "audio": cmd_audio,
      "extract": cmd_extract, "trim": cmd_trim, "compress": cmd_compress,
-     "info": cmd_mediainfo, "presets": cmd_presets}[a.cmd](a)
+     "info": cmd_mediainfo, "presets": cmd_presets,
+     "search": cmd_search, "add": cmd_add, "custom": cmd_custom,
+     "delete": cmd_delete}[a.cmd](a)
 
 
 if __name__ == "__main__":

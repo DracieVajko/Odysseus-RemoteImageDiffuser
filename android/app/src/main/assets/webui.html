@@ -159,6 +159,16 @@ canvas#maskpad { width: 100%; border-radius: 6px; border: 1px solid #444; cursor
 <div><button class="go" style="margin-top:0;background:#1f6feb" onclick="installMissing()">Install all missing</button></div>
 </div>
 <div id="modelList"></div>
+
+<label style="margin-top:14px">Find models on HuggingFace</label>
+<div class="row">
+<div><input type="text" id="modelQuery" placeholder="e.g. dreamshaper, sdxl, realesrgan, whisper"></div>
+<div style="max-width:110px"><button class="go" style="margin-top:0" onclick="findModels()">Search</button></div>
+</div>
+<div id="findResults"></div>
+
+<label style="margin-top:14px">Custom models (outside catalog)</label>
+<div id="customList"></div>
 </div>
 
 <div id="formSettings" style="display:none">
@@ -176,7 +186,7 @@ canvas#maskpad { width: 100%; border-radius: 6px; border: 1px solid #444; cursor
 let MODELS = [];
 function log(m){ const el=document.getElementById('log'); el.textContent = new Date().toLocaleTimeString()+' '+m+'\n'+el.textContent; }
 const TABS = ['txt','img','paint','up','tr','cap','tools','models','settings'];
-function showTab(t){ if(t==='models') loadCatalog(); if(t==='settings') loadSettings();
+function showTab(t){ if(t==='models'){ loadCatalog(); loadCustom(); } if(t==='settings') loadSettings();
   for (const x of TABS) {
     document.getElementById('tab'+x[0].toUpperCase()+x.slice(1)).classList.toggle('active', x===t);
     document.getElementById('form'+x[0].toUpperCase()+x.slice(1)).style.display = x===t?'block':'none';
@@ -444,6 +454,7 @@ async function loadCatalog(){
     const j = await r.json();
     CATALOG = j.models || [];
     renderCatalog();
+    loadCustom();
   } catch(e){ log('catalog error: '+e); }
 }
 function fmtGb(x){ return (x||0).toFixed(2)+' GB'; }
@@ -492,6 +503,98 @@ function renderCatalog(){
     box.appendChild(row);
   }
 }
+async function findModels(){
+  const q = document.getElementById('modelQuery').value.trim();
+  if(!q){ alert('Enter a search query'); return; }
+  const box = document.getElementById('findResults');
+  box.innerHTML = '<div style="font-size:12px;color:#7d8590;padding:6px">searching…</div>';
+  try {
+    const r = await fetch('/v1/models/find?q='+encodeURIComponent(q)+'&limit=15');
+    const j = await r.json();
+    if(!r.ok){ box.textContent = 'ERROR: '+(j.error||r.status); return; }
+    box.innerHTML = '';
+    if(!(j.models||[]).length){ box.textContent = 'no results'; return; }
+    for (const m of j.models) {
+      const row = document.createElement('div');
+      row.style.cssText = 'display:flex;gap:8px;align-items:center;padding:6px 0;border-bottom:1px solid #262b33';
+      const info = document.createElement('div');
+      info.style.cssText = 'flex:1;font-size:12px';
+      info.innerHTML = '<b>'+m.id+'</b>'
+        + '<div style="color:#7d8590;font-size:11px">'+(m.pipeline_tag||m.library||'?')
+        + ' · ↓'+m.downloads+' · ♥'+m.likes+(m.gated?' · gated':'')+'</div>';
+      const btn = document.createElement('button');
+      btn.className = 'go';
+      btn.style.cssText = 'margin:0;width:96px;padding:5px;font-size:11px;background:#1f6feb';
+      btn.textContent = 'Add';
+      btn.onclick = () => addCustom(m.id);
+      row.appendChild(info); row.appendChild(btn);
+      box.appendChild(row);
+    }
+  } catch(e){ box.textContent = 'ERROR: '+e; }
+}
+
+async function addCustom(repoId){
+  log('adding '+repoId+'…');
+  try {
+    const r = await fetch('/v1/models/add',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({repo_id:repoId})});
+    const j = await r.json();
+    if(!r.ok){ log('add ERROR '+r.status+': '+JSON.stringify(j)); alert(JSON.stringify(j)); return; }
+    log('adding '+repoId+' (background)');
+    pollAdd(j.id);
+  } catch(e){ log('add error: '+e); }
+}
+
+let addTimer = null;
+function pollAdd(name){
+  clearTimeout(addTimer);
+  fetch('/v1/models/add/status/'+encodeURIComponent(name)).then(r=>r.json()).then(j=>{
+    if(j.state === 'downloading'){ addTimer = setTimeout(()=>pollAdd(name), 3000); }
+    else {
+      log('add '+name+': '+j.state+(j.error?' ('+j.error+')':''));
+      loadCustom();
+      refresh();
+    }
+  }).catch(()=>{ addTimer = setTimeout(()=>pollAdd(name), 5000); });
+}
+
+async function loadCustom(){
+  try {
+    const r = await fetch('/v1/models/custom');
+    const j = await r.json();
+    const box = document.getElementById('customList');
+    box.innerHTML = '';
+    if(!(j.models||[]).length){ box.innerHTML = '<div style="font-size:12px;color:#7d8590;padding:6px">none</div>'; return; }
+    for (const m of j.models) {
+      const row = document.createElement('div');
+      row.style.cssText = 'display:flex;gap:8px;align-items:center;padding:6px 0;border-bottom:1px solid #262b33';
+      const info = document.createElement('div');
+      info.style.cssText = 'flex:1;font-size:12px';
+      const state = m.state === 'downloading' ? 'DOWNLOADING '+m.progress+'%' : (m.state === 'error' ? 'ERROR' : '');
+      info.innerHTML = '<b>'+m.name+'</b><div style="color:#7d8590;font-size:11px">'
+        + fmtGb(m.size_gb)+(state?' · <span style="color:#d29922">'+state+'</span>':'')+'</div>';
+      const btn = document.createElement('button');
+      btn.className = 'go';
+      btn.style.cssText = 'margin:0;width:96px;padding:5px;font-size:11px;background:#da3633';
+      btn.textContent = 'Delete';
+      btn.disabled = m.state === 'downloading';
+      btn.onclick = () => deleteCustom(m.name);
+      row.appendChild(info); row.appendChild(btn);
+      box.appendChild(row);
+    }
+  } catch(e){ log('custom list error: '+e); }
+}
+
+async function deleteCustom(name){
+  if(!confirm('Delete model directory "'+name+'" from models/?')) return;
+  try {
+    const r = await fetch('/v1/models/delete',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name})});
+    const j = await r.json();
+    if(!r.ok){ log('delete ERROR '+r.status+': '+JSON.stringify(j)); alert(JSON.stringify(j)); return; }
+    log('deleted custom model '+name);
+    loadCustom();
+  } catch(e){ log('delete error: '+e); }
+}
+
 async function installModel(id){
   log('install '+id+'…');
   try {

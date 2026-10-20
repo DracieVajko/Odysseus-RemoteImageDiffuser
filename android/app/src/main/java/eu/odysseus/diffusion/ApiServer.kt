@@ -267,6 +267,79 @@ class ApiServer(
                     )
                 }
             }
+            get("/v1/models/find") {
+                val q = call.request.queryParameters["q"] ?: ""
+                val limit = (call.request.queryParameters["limit"] ?: "15").toIntOrNull() ?: 15
+                if (q.isBlank()) {
+                    call.respond(HttpStatusCode.BadRequest, jsonOf("error" to "missing q"))
+                    return@get
+                }
+                try {
+                    val url = java.net.URL(
+                        "https://huggingface.co/api/models?search=" +
+                            java.net.URLEncoder.encode(q, "UTF-8") + "&limit=" + limit
+                    )
+                    val conn = url.openConnection() as java.net.HttpURLConnection
+                    conn.connectTimeout = 8000
+                    conn.readTimeout = 12000
+                    val body = conn.inputStream.bufferedReader().use { it.readText() }
+                    conn.disconnect()
+                    val arr = org.json.JSONArray(body)
+                    val out = ArrayList<JsonElement>()
+                    for (i in 0 until arr.length()) {
+                        val o = arr.getJSONObject(i)
+                        out.add(
+                            jsonOf(
+                                "id" to o.optString("id"),
+                                "downloads" to o.optInt("downloads"),
+                                "likes" to o.optInt("likes"),
+                                "pipeline_tag" to o.optString("pipeline_tag"),
+                                "library" to o.optString("library_name"),
+                            )
+                        )
+                    }
+                    call.respond(jsonOf("query" to q, "count" to out.size, "models" to out))
+                } catch (e: Exception) {
+                    call.respond(HttpStatusCode.BadGateway, jsonOf("error" to (e.message ?: "hf search failed")))
+                }
+            }
+            // Vlastný model na mobile: podporovaný je single-file URL
+            // (GGUF/ONNX/safetensors). Diffusers snapshot treba stiahnuť na PC.
+            post("/v1/models/add") {
+                val body = call.receiveText()
+                val url = Regex("\"url\"\\s*:\\s*\"([^\"]+)\"").find(body)?.groupValues?.get(1)
+                if (url.isNullOrBlank()) {
+                    call.respond(
+                        HttpStatusCode.NotImplemented,
+                        jsonOf("error" to "mobile supports single-file URL only; download diffusers snapshots on PC"),
+                    )
+                    return@post
+                }
+                val ctx = appContext
+                if (ctx == null) {
+                    call.respond(HttpStatusCode.InternalServerError, jsonOf("error" to "no app context"))
+                    return@post
+                }
+                val fileName = url.substringAfterLast('/').substringBefore('?')
+                val name = (Regex("\"name\"\\s*:\\s*\"([^\"]+)\"").find(body)?.groupValues?.get(1)
+                    ?: fileName.substringBeforeLast('.')).replace("..", "_")
+                try {
+                    val dm = ctx.getSystemService(android.content.Context.DOWNLOAD_SERVICE)
+                        as android.app.DownloadManager
+                    val req = android.app.DownloadManager.Request(android.net.Uri.parse(url))
+                        .setTitle("Odysseus: $name")
+                        .setNotificationVisibility(android.app.DownloadManager.Request.VISIBILITY_VISIBLE)
+                        .setDestinationInExternalFilesDir(
+                            ctx,
+                            android.os.Environment.DIRECTORY_DOWNLOADS,
+                            "models/$name/$fileName",
+                        )
+                    val id = dm.enqueue(req)
+                    call.respond(jsonOf("name" to name, "state" to "downloading", "download_id" to id))
+                } catch (e: Exception) {
+                    call.respond(HttpStatusCode.BadRequest, jsonOf("error" to (e.message ?: "enqueue failed")))
+                }
+            }
             get("/webui") {
                 // Rovnaké UI ako PC: HTML sa balí do APK (assets/webui.html).
                 val html = appContext?.assets?.open("webui.html")

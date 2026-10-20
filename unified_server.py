@@ -10,6 +10,7 @@ GET /health, GET /v1/models, POST /v1/images/generations|edits,
 POST /v1/images/inpaint|harmonize|upscale, POST /v1/audio/transcriptions|translations,
 GET /v1/images/progress/{id}, GET /webui, GET / -> /webui
 """
+import asyncio
 import base64
 import io
 import tempfile
@@ -49,6 +50,46 @@ _manager = ModelManager()
 _START_TS = time.time()
 
 
+IDLE_UNLOAD_SECONDS = int(os.getenv("UNIFIED_IDLE_UNLOAD_SECONDS", "900"))
+
+
+def _release_engines(reason: str = ""):
+    """Uvoľní reálne váhy pri prepnutí/idle (manager drží len evidenciu)."""
+    try:
+        import diffusion_server as ds
+        if getattr(ds, "_pipe", None) is not None:
+            ds.unload_current_model()
+    except Exception:
+        pass
+    try:
+        release_vlm()
+    except Exception:
+        pass
+
+
+def should_idle_unload(mm, limit: int) -> bool:
+    """Idle unload len keď je model rezidentný, nič nebeží a je prekročený limit."""
+    if mm.status()["loaded_kind"] is None:
+        return False
+    if mm.in_flight() > 0:
+        return False
+    return mm.idle_seconds() >= limit
+
+
+async def _idle_unloader():
+    while True:
+        await asyncio.sleep(30)
+        try:
+            if not should_idle_unload(_manager, IDLE_UNLOAD_SECONDS):
+                continue
+            if True:
+                logger.info("idle unload after %.0fs (limit %ss)",
+                            _manager.idle_seconds(), IDLE_UNLOAD_SECONDS)
+                _manager.unload("idle")
+        except Exception as e:
+            logger.warning("idle unloader: %s", e)
+
+
 @asynccontextmanager
 async def lifespan(application):
     # Best effort: registry bez váh; reálna inferencia až keď sú torch+váhy.
@@ -57,10 +98,37 @@ async def lifespan(application):
             init_diffusion_engine()
     except Exception as e:
         logger.warning(f"engine init skipped: {e}")
-    yield
+    _manager.on_unload = _release_engines
+    task = asyncio.create_task(_idle_unloader())
+    try:
+        yield
+    finally:
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
 
 
 app = FastAPI(title="Unified Standalone Server", lifespan=lifespan)
+
+_TRACKED_PREFIXES = ("/v1/images/", "/v1/audio/", "/v1/chat/")
+
+
+@app.middleware("http")
+async def _track_inflight(request, call_next):
+    """Počíta prebiehajúce inferenčné requesty, aby idle unloader nemohol
+    vyhodiť model počas dlhej generácie (cold load ~3 min > idle limit)."""
+    path = request.url.path
+    track = request.method == "POST" and path.startswith(_TRACKED_PREFIXES)
+    if track:
+        _manager.begin()
+    try:
+        return await call_next(request)
+    finally:
+        if track:
+            _manager.end()
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -169,6 +237,20 @@ def _release_sd_best_effort():
         pass
 
 
+
+
+from contextlib import contextmanager
+
+
+@contextmanager
+def _in_flight():
+    _manager.begin()
+    try:
+        yield
+    finally:
+        _manager.end()
+
+
 # ---------- system ----------
 
 @app.get("/")
@@ -180,16 +262,30 @@ def root():
 def health():
     reg = _image_registry()
     st = _manager.status()
+    actual_model, actual_kind = "", None
+    try:
+        import diffusion_server as ds
+        if getattr(ds, "_pipe", None) is not None and getattr(ds, "_model_id", ""):
+            actual_model, actual_kind = ds._model_id, "image"
+    except Exception:
+        pass
+    if not actual_model and st["loaded_kind"] == "vlm":
+        actual_model, actual_kind = VLM_ID, "vlm"
+    if not actual_model and st["loaded_kind"] == "audio":
+        actual_model, actual_kind = st["loaded_id"], "audio"
     return {
         "status": "ok",
         "model": reg.get("default_image_model", ""),
-        "current_model": st["loaded_id"],
+        "current_model": actual_model or st["loaded_id"],
         "device": _device(),
         "available_models": sorted(list(reg.get("image_models", {}).keys())),
         "loading": st["loading"],
         "loading_model": st["loading_model"],
         "busy": st["busy"],
         "queue": st["queue"],
+        "in_flight": st.get("in_flight"),
+        "idle_seconds": st.get("idle_seconds"),
+        "idle_unload_seconds": IDLE_UNLOAD_SECONDS,
         "uptime_s": round(time.time() - _START_TS, 1),
         # audio sekcia (WhisperApi kompat)
         "audio_model": reg.get("default_audio_model", "small"),
@@ -1003,6 +1099,63 @@ def settings_info():
             "ytdlp": _sh.which("yt-dlp") or "",
         },
     }
+
+
+
+
+# ---------- model finder / custom models ----------
+
+from unified import model_finder as _mf
+
+
+class AddModelRequest(BaseModel):
+    repo_id: str = ""
+    name: str = ""
+
+
+class DeleteModelRequest(BaseModel):
+    name: str = ""
+
+
+@app.get("/v1/models/find")
+def models_find(q: str = "", limit: int = 20, task: str = ""):
+    try:
+        return _mf.search_hf(q, limit=limit, filter_task=task)
+    except RuntimeError as e:
+        return JSONResponse(status_code=502, content={"error": str(e)[:300]})
+
+
+@app.get("/v1/models/custom")
+def models_custom():
+    res = _mf.custom_models()
+    for m in res["models"]:
+        m.update(_mf.add_state(m["name"]))
+    return res
+
+
+@app.post("/v1/models/add")
+def models_add(req: AddModelRequest):
+    try:
+        return _mf.start_add(req.repo_id, req.name)
+    except ValueError as e:
+        return JSONResponse(status_code=400, content={"error": str(e)})
+
+
+@app.get("/v1/models/add/status/{name}")
+def models_add_status(name: str):
+    return {"name": name, **_mf.add_state(name)}
+
+
+@app.post("/v1/models/delete")
+def models_delete(req: DeleteModelRequest):
+    try:
+        return _mf.delete_custom(req.name)
+    except KeyError as e:
+        return JSONResponse(status_code=404, content={"error": str(e).strip("'")})
+    except ValueError as e:
+        return JSONResponse(status_code=400, content={"error": str(e)})
+    except Exception as e:
+        return JSONResponse(status_code=500, content={"error": str(e)[:200]})
 
 
 if __name__ == "__main__":
