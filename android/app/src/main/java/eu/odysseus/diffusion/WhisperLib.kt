@@ -1,15 +1,23 @@
 package eu.odysseus.diffusion
 
+import android.util.Log
 import java.io.File
 
 /**
- * JNI obal pre whisper.cpp (`libwhisper.so`).
+ * JNI obal pre whisper.cpp (`libwhisper_jni.so`).
  *
- * Ak prebuilt `.so` súbor ešte nie je v `jniLibs/arm64-v8a`,
- * fallback bezpečne vráti oznam bez pádov appky.
+ * Kontext modelu sa CACHUJE: načítanie 181 MB váh trvá desiatky sekúnd,
+ * takže pri každom requeste by bol prepis nepoužiteľne pomalý. Cache drží
+ * max 1 model; pri požiadavke na iný sa starý korektne uvoľní.
+ *
+ * Ak natívna knižnica chýba, fallback vráti oznam bez pádu appky.
  */
 object WhisperLib {
+    private const val TAG = "WhisperLib"
     private var isNativeLoaded = false
+    private var cachedPath: String? = null
+    private var cachedCtx: Long = 0L
+    private val lock = Any()
 
     init {
         try {
@@ -17,10 +25,13 @@ object WhisperLib {
             // a načíta sa automaticky cez DT_NEEDED.
             System.loadLibrary("whisper_jni")
             isNativeLoaded = true
+            Log.i(TAG, "libwhisper_jni.so loaded")
         } catch (e: UnsatisfiedLinkError) {
             isNativeLoaded = false
+            Log.w(TAG, "native lib missing: ${e.message}")
         } catch (e: Exception) {
             isNativeLoaded = false
+            Log.w(TAG, "native lib failed: ${e.message}")
         }
     }
 
@@ -28,8 +39,8 @@ object WhisperLib {
 
     /**
      * Transkripcia / preklad zvuku pomocou whisper.cpp.
-     * @param modelFile cesta ku GGUF/GGML súboru (napr. ggml-small-q5_1.bin)
-     * @param samples FloatArray PCM vzozriek pri 16 kHz mono [-1.0, 1.0]
+     * @param modelFile cesta ku GGML súboru (napr. ggml-small-q5_1.bin)
+     * @param samples FloatArray PCM vzorky pri 16 kHz mono [-1.0, 1.0]
      * @param language "sk", "en", "auto"
      * @param translate true pre preklad do angličtiny (/v1/audio/translations)
      */
@@ -40,7 +51,7 @@ object WhisperLib {
         translate: Boolean = false,
     ): String {
         if (!isNativeLoaded) {
-            return "[stub] libwhisper.so zatiaľ nie je v jniLibs. Vzorky zvuku: ${samples.size} (~${samples.size / 16000}s)"
+            return "[stub] libwhisper_jni.so nie je v APK. Vzorky: ${samples.size} (~${samples.size / 16000}s)"
         }
         if (!modelFile.exists()) {
             return "[error] model file not found: ${modelFile.absolutePath}"
@@ -49,20 +60,50 @@ object WhisperLib {
             return ""
         }
 
-        var ctxPtr = 0L
-        try {
-            ctxPtr = initContext(modelFile.absolutePath)
-            if (ctxPtr == 0L) {
+        synchronized(lock) {
+            ensureContext(modelFile)
+            if (cachedCtx == 0L) {
                 return "[error] failed to initialize whisper context"
             }
             val threads = Runtime.getRuntime().availableProcessors().coerceIn(1, 4)
-            return fullTranscribe(ctxPtr, threads, samples, language, translate)
-        } catch (e: Exception) {
-            return "[error] whisper inference failed: ${e.message}"
-        } finally {
-            if (ctxPtr != 0L) {
-                freeContext(ctxPtr)
+            val t0 = System.currentTimeMillis()
+            return try {
+                val text = fullTranscribe(cachedCtx, threads, samples, language, translate)
+                Log.i(TAG, "transcribed ${samples.size / 16000.0}s in ${System.currentTimeMillis() - t0} ms " +
+                        "(threads=$threads, lang=$language)")
+                text
+            } catch (e: Exception) {
+                Log.e(TAG, "inference failed: ${e.message}", e)
+                "[error] whisper inference failed: ${e.message}"
             }
+        }
+    }
+
+    /** Načíta model do cache, ak ešte nie je (alebo je iný). Volaj pod lockom. */
+    private fun ensureContext(modelFile: File) {
+        val path = modelFile.absolutePath
+        if (cachedCtx != 0L && cachedPath == path) return
+        if (cachedCtx != 0L) {
+            freeContext(cachedCtx)
+            cachedCtx = 0L
+            cachedPath = null
+            Log.i(TAG, "released previous whisper context")
+        }
+        val t0 = System.currentTimeMillis()
+        cachedCtx = initContext(path)
+        cachedPath = if (cachedCtx != 0L) path else null
+        Log.i(TAG, "model loaded in ${System.currentTimeMillis() - t0} ms (ok=${cachedCtx != 0L})")
+    }
+
+    /** Uvoľní kontext (volané pri prepnutí modelu / idle unload). */
+    fun release() {
+        synchronized(lock) {
+            if (cachedCtx != 0L) {
+                freeContext(cachedCtx)
+                Log.i(TAG, "context released")
+            }
+            cachedCtx = 0L
+            cachedPath = null
         }
     }
 

@@ -444,7 +444,7 @@ class ApiServer(
                 val rid = req.request_id.ifEmpty { UUID.randomUUID().toString() }
                 val steps = mobileSteps(req.quality, req.steps)
                 val modelId = req.model.ifEmpty { "lcm-dreamshaper-int8" }
-                manager.ensure("image", modelId) // 503 loading → StatusPages
+                switchTo("image", modelId) // 503 loading → StatusPages
                 requireModelReady("lcm-dreamshaper-int8") // 503 will-not-load bez váh
                 val job = JobProgress(rid, JobState.RUNNING, 0, steps, 0)
                 progress[rid] = job
@@ -497,7 +497,7 @@ class ApiServer(
                 }
                 val rid = requestId.ifEmpty { UUID.randomUUID().toString() }
                 val steps = mobileSteps(quality, null)
-                manager.ensure("image", model.ifEmpty { "lcm-dreamshaper-int8" })
+                switchTo("image", model.ifEmpty { "lcm-dreamshaper-int8" })
                 requireModelReady("lcm-dreamshaper-int8")
                 val job = JobProgress(rid, JobState.DONE, steps, steps, 100)
                 progress[rid] = job
@@ -523,7 +523,7 @@ class ApiServer(
                     throw ModelWillNotLoadError("canvas $req.width×$req.height exceeds $MAX_CANVAS_PX")
                 }
                 val rid = req.request_id.ifEmpty { UUID.randomUUID().toString() }
-                manager.ensure("image", req.model.ifEmpty { "lcm-dreamshaper-int8" })
+                switchTo("image", req.model.ifEmpty { "lcm-dreamshaper-int8" })
                 requireModelReady("lcm-dreamshaper-int8")
                 val steps = (req.steps ?: 8).coerceIn(MOBILE_STEPS_MIN, MOBILE_STEPS_MAX)
                 val job = JobProgress(rid, JobState.DONE, steps, steps, 100)
@@ -541,7 +541,7 @@ class ApiServer(
                     throw ModelWillNotLoadError("max_side ${req.max_side} exceeds $MAX_CANVAS_PX")
                 }
                 val rid = req.request_id.ifEmpty { UUID.randomUUID().toString() }
-                manager.ensure("image", req.model.ifEmpty { "lcm-dreamshaper-int8" })
+                switchTo("image", req.model.ifEmpty { "lcm-dreamshaper-int8" })
                 requireModelReady("lcm-dreamshaper-int8")
                 val job = JobProgress(rid, JobState.DONE, 1, 1, 100)
                 progress[rid] = job
@@ -558,7 +558,7 @@ class ApiServer(
                     call.respond(HttpStatusCode.BadRequest, jsonOf("error" to "scale must be 2..4"))
                     return@post
                 }
-                manager.ensure("upscale", req.model)
+                switchTo("upscale", req.model)
                 requireModelReady("realesrgan-x4plus-ncnn")
                 val rid = req.request_id.ifEmpty { UUID.randomUUID().toString() }
                 // TODO(NCNN): Real-ESRGAN-x4v3 tile processing (Vulkan).
@@ -621,7 +621,7 @@ class ApiServer(
             call.respond(HttpStatusCode.UnsupportedMediaType, jsonOf("error" to "unsupported extension .$ext"))
             return
         }
-        manager.ensure("audio", model) // 503 loading počas prepnutia image→audio
+        switchTo("audio", model) // 503 loading počas prepnutia image→audio
         requireModelReady("whisper-small-q5_1")
 
         val tempDir = downloader.modelsDir()
@@ -644,6 +644,13 @@ class ApiServer(
                 "auto_split" to autoSplit,
             )
         )
+    }
+
+    /** Prepne rezidentný model; pri odchode z audio uvoľní whisper kontext. */
+    private fun switchTo(kind: String, id: String): String {
+        val prev = manager.status().loadedKind
+        if (prev == "audio" && kind != "audio") WhisperLib.release()
+        return manager.ensure(kind, id)
     }
 
     private fun requireModelReady(assetId: String) {

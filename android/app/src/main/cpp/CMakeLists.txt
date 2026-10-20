@@ -7,6 +7,15 @@
 cmake_minimum_required(VERSION 3.22.1)
 project("odysseus-whisper")
 
+# AGP Debug variant posiela -O0, čo robí whisper.cpp ~50x pomalším
+# (5 s audio = 4 min). Vynútime optimalizácie aj v Debug builde.
+set(CMAKE_C_FLAGS_DEBUG "${CMAKE_C_FLAGS_DEBUG} -O3")
+set(CMAKE_CXX_FLAGS_DEBUG "${CMAKE_CXX_FLAGS_DEBUG} -O3")
+if(NOT CMAKE_BUILD_TYPE OR CMAKE_BUILD_TYPE STREQUAL "Debug")
+    set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -O3")
+    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -O3")
+endif()
+
 # Len jadro: žiadne testy, examples, server, curl ani SDL.
 set(WHISPER_BUILD_TESTS OFF CACHE BOOL "" FORCE)
 set(WHISPER_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
