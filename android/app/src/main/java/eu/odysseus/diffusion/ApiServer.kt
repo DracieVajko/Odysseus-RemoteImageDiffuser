@@ -11,6 +11,8 @@ import io.ktor.server.netty.NettyApplicationEngine
 import io.ktor.server.plugins.contentnegotiation.ContentNegotiation
 import io.ktor.server.plugins.statuspages.StatusPages
 import io.ktor.server.request.receive
+import io.ktor.server.request.path
+import io.ktor.server.request.httpMethod
 import io.ktor.server.request.receiveMultipart
 import io.ktor.server.request.receiveText
 import io.ktor.server.response.respond
@@ -174,6 +176,15 @@ class ApiServer(
     }
 
     private fun Application.module() {
+        // Remote fallback: image/upscale/caption/ffmpeg idú na PC, ak je
+        // nastavený remote a režim REMOTE/AUTO. Audio ostáva lokálne (JNI).
+        intercept(io.ktor.server.application.ApplicationCallPipeline.Call) {
+            val path = call.request.path()
+            val method = call.request.httpMethod.value
+            if (ProxyForward.shouldProxy(path, method)) {
+                if (ProxyForward.forward(call)) finish()
+            }
+        }
         install(ContentNegotiation) {
             json(Json { ignoreUnknownKeys = true; explicitNulls = false })
         }

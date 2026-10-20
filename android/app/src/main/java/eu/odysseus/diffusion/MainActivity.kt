@@ -429,6 +429,8 @@ class DiffusionService : Service() {
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         val mode = intent?.getStringExtra("mode") ?: "AUTO"
         val remote = intent?.getStringExtra("remote") ?: ""
+        AppConfig.mode = mode
+        AppConfig.remoteBase = remote
         if (server == null) {
             server = ApiServer(AppGraph.manager, ModelDownloader(this), applicationContext).also { it.start(wait = false) }
             (getSystemService(NOTIFICATION_SERVICE) as NotificationManager)
