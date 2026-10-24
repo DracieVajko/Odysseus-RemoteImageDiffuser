@@ -792,8 +792,41 @@ class ApiServer(
                 switchTo("upscale", req.model)
                 requireModelReady("realesrgan-x4plus-ncnn")
                 val rid = req.request_id.ifEmpty { UUID.randomUUID().toString() }
-                // TODO(NCNN): Real-ESRGAN-x4v3 tile processing (Vulkan).
-                call.respond(jsonOf("image" to STUB_PNG_B64, "elapsed" to 0.0, "request_id" to rid))
+                if (!RealEsrganNcnnEngine.isReady()) {
+                    val modelDir = downloader.modelDir("realesrgan-x4plus-ncnn")
+                    val ctx = appContext ?: run {
+                        call.respond(HttpStatusCode.InternalServerError, jsonOf("error" to "no app context"))
+                        return@post
+                    }
+                    manager.setLoading("realesrgan-x4plus-ncnn", true)
+                    try {
+                        if (!RealEsrganNcnnEngine.init(ctx, modelDir)) {
+                            throw ModelWillNotLoadError("Real-ESRGAN NCNN init failed: " + RealEsrganNcnnEngine.lastError, -1, -1)
+                        }
+                    } finally {
+                        manager.setLoading("realesrgan-x4plus-ncnn", false)
+                    }
+                }
+                val src = decodeB64Image(req.image)
+                if (src == null) {
+                    call.respond(HttpStatusCode.BadRequest, jsonOf("error" to "invalid image base64"))
+                    return@post
+                }
+                val t0 = System.currentTimeMillis()
+                val out = RealEsrganNcnnEngine.upscale(src, req.scale)
+                src.recycle()
+                if (out == null) {
+                    throw ModelWillNotLoadError("Real-ESRGAN NCNN upscale failed: " + RealEsrganNcnnEngine.lastError, -1, -1)
+                }
+                val elapsed = (System.currentTimeMillis() - t0) / 1000.0
+                val b64 = bitmapToB64(out)
+                out.recycle()
+                call.respond(jsonOf(
+                    "image" to b64,
+                    "elapsed" to elapsed,
+                    "request_id" to rid,
+                    "engine" to "realesrgan-ncnn",
+                ))
             }
             post("/v1/images/caption") {
                 val req = wireJson.decodeFromString<CaptionReq>(call.receiveText())
@@ -801,8 +834,42 @@ class ApiServer(
                     call.respond(HttpStatusCode.BadRequest, jsonOf("error" to "image required (base64)"))
                     return@post
                 }
-// Mobile: SmolVLM runtime is not bundled yet (see ModelCatalog) → 503, not stub text.
-                throw ModelWillNotLoadError("vlm smolvlm-500m not available on device (PC :8101 /v1/images/caption works)")
+                switchTo("vlm", req.model)
+                requireModelReady("smolvlm-500m-gguf")
+                val rid = req.request_id.ifEmpty { UUID.randomUUID().toString() }
+                if (!SmolVlmEngine.isReady()) {
+                    val modelDir = downloader.modelDir("smolvlm-500m-gguf")
+                    val ctx = appContext ?: run {
+                        call.respond(HttpStatusCode.InternalServerError, jsonOf("error" to "no app context"))
+                        return@post
+                    }
+                    manager.setLoading("smolvlm-500m-gguf", true)
+                    try {
+                        if (!SmolVlmEngine.init(ctx, modelDir)) {
+                            throw ModelWillNotLoadError("SmolVLM llama.cpp init failed: " + SmolVlmEngine.lastError, -1, -1)
+                        }
+                    } finally {
+                        manager.setLoading("smolvlm-500m-gguf", false)
+                    }
+                }
+                val src = decodeB64Image(req.image)
+                if (src == null) {
+                    call.respond(HttpStatusCode.BadRequest, jsonOf("error" to "invalid image base64"))
+                    return@post
+                }
+                val t0 = System.currentTimeMillis()
+                val caption = SmolVlmEngine.caption(src, req.prompt, req.max_tokens ?: 256)
+                src.recycle()
+                if (caption == null) {
+                    throw ModelWillNotLoadError("SmolVLM llama.cpp caption failed: " + SmolVlmEngine.lastError, -1, -1)
+                }
+                val elapsed = (System.currentTimeMillis() - t0) / 1000.0
+                call.respond(jsonOf(
+                    "caption" to caption,
+                    "elapsed" to elapsed,
+                    "request_id" to rid,
+                    "engine" to "smolvlm-llama",
+                ))
             }
             post("/v1/chat/completions") {
                 // V2 mobile: vision chat goes through the PC; error shape like /v1/images/caption.
@@ -907,10 +974,12 @@ switchTo("audio", effectiveModel) // 503 loading while switching image→audio
         )
     }
 
-/** Switch the resident model; release the whisper context when leaving audio. */
+/** Switch the resident model; release engines when leaving their kind. */
     private fun switchTo(kind: String, id: String): String {
         val prev = manager.status().loadedKind
         if (prev == "audio" && kind != "audio") WhisperLib.release()
+        if (prev == "upscale" && kind != "upscale") RealEsrganNcnnEngine.release()
+        if (prev == "vlm" && kind != "vlm") SmolVlmEngine.release()
         return manager.ensure(kind, id)
     }
 
