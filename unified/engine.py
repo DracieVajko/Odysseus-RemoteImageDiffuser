@@ -1,10 +1,10 @@
 """Engine init + real inpaint delegation.
 
-diffusion_server.py drží globály (_pipe, _args, registry) a bez CLI init
-nevie inferovať. init_diffusion_engine() ho inicializuje v lazy režime
-(registry z models.json, žiadne váhy) nastavením minimálneho _args
-Namespace — volá sa raz pri štarte unified_server, nikdy pri importe.
-Bez torch/diffusers vráti False a unified_server ide placeholder/stub cestou.
+diffusion_server.py keeps globals (_pipe, _args, registry) and cannot infer
+without a CLI init. init_diffusion_engine() initializes it in lazy mode
+(registry from models.json, no weights) by setting a minimal _args
+Namespace — called once at unified_server startup, never on import.
+Without torch/diffusers it returns False and unified_server uses the placeholder/stub path.
 """
 import argparse
 import base64
@@ -62,10 +62,9 @@ def _is_engine_ready() -> bool:
 
 def try_real_inpaint(image_b64, mask_b64, prompt, model_id,
                      strength=0.75, steps=0, force_engine=False):
-    """Vráti výsledný image b64 z reálnej pipeline, alebo None (fallback echo).
+    """Return the resulting image b64 from the real pipeline, or None (echo fallback).
 
-    ValueError pri zlom base64 vstupe — vždy, aj bez enginu (validácia prvá).
-    """
+    ValueError on bad base64 input — always, even without the engine (validation first)."""
     try:
         base64.b64decode(image_b64)
         base64.b64decode(mask_b64)

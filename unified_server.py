@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
-"""Unified Standalone Server — obrazy + audio v jednom procese, jedna zmluva.
+"""Unified Standalone Server — images + audio in one process, one contract.
 
-Spája DiffusionServer (:8101) + WhisperApi (:4444) bez duplikácie ťažkej
-logiky: deleguje na existujúce moduly lazy (až za ModelManager gate),
-takže idle VRAM/RAM ostáva voľná. Vždy max 1 ťažký model rezidentný.
 
-Cesty (frozen pre Odysseus):
+Combines DiffusionServer (:8101) + WhisperApi (:4444) without duplicating
+heavy logic: delegates to existing lazy modules (behind the ModelManager
+gate), so idle VRAM/RAM stays free. At most one heavy model resident.
+Routes (frozen for Odysseus):
 GET /health, GET /v1/models, POST /v1/images/generations|edits,
 POST /v1/images/inpaint|harmonize|upscale, POST /v1/audio/transcriptions|translations,
 GET /v1/images/progress/{id}, GET /webui, GET / -> /webui
@@ -26,13 +26,13 @@ from fastapi import FastAPI, File, Form, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from pydantic import BaseModel
-from typing import Optional, Tuple
+from typing import Optional, Tuple, List
 
 from unified.audio_proxy import transcribe_via_service
 from unified.audio_splitter import transcribe_with_splitting, get_audio_duration
 from unified.ffmpeg_tools import (
-    VIDEO_PRESETS, AUDIO_PRESETS, RESIZE_PRESETS,
-    convert_video, convert_audio, extract_audio, trim_media, compress_video,
+    VIDEO_PRESETS, AUDIO_PRESETS, IMAGE_PRESETS, RESIZE_PRESETS,
+    convert_video, convert_audio, convert_image, extract_audio, trim_media, compress_video,
     get_media_info, get_presets,
 )
 from unified.engine import init_diffusion_engine, try_real_inpaint
@@ -54,7 +54,7 @@ IDLE_UNLOAD_SECONDS = int(os.getenv("UNIFIED_IDLE_UNLOAD_SECONDS", "900"))
 
 
 def _release_engines(reason: str = ""):
-    """Uvoľní reálne váhy pri prepnutí/idle (manager drží len evidenciu)."""
+    """Release real weights on switch/idle (the manager keeps bookkeeping only)."""
     try:
         import diffusion_server as ds
         if getattr(ds, "_pipe", None) is not None:
@@ -68,7 +68,7 @@ def _release_engines(reason: str = ""):
 
 
 def should_idle_unload(mm, limit: int) -> bool:
-    """Idle unload len keď je model rezidentný, nič nebeží a je prekročený limit."""
+    """Idle unload only when a model is resident, nothing runs, and the limit is exceeded."""
     if mm.status()["loaded_kind"] is None:
         return False
     if mm.in_flight() > 0:
@@ -92,7 +92,7 @@ async def _idle_unloader():
 
 @asynccontextmanager
 async def lifespan(application):
-    # Best effort: registry bez váh; reálna inferencia až keď sú torch+váhy.
+    # Best effort: registry without weights; real inference only with torch + weights.
     try:
         if os.getenv("UNIFIED_NO_ENGINE", "") != "1":
             init_diffusion_engine()
@@ -117,8 +117,8 @@ _TRACKED_PREFIXES = ("/v1/images/", "/v1/audio/", "/v1/chat/")
 
 @app.middleware("http")
 async def _track_inflight(request, call_next):
-    """Počíta prebiehajúce inferenčné requesty, aby idle unloader nemohol
-    vyhodiť model počas dlhej generácie (cold load ~3 min > idle limit)."""
+    """Counts in-flight inference requests so the idle unloader cannot
+    evict a model during a long generation (cold load ~3 min > idle limit)."""
     path = request.url.path
     track = request.method == "POST" and path.startswith(_TRACKED_PREFIXES)
     if track:
@@ -178,6 +178,8 @@ def _raise_loading(e: ModelLoadingError):
 class GenRequest(BaseModel):
     model: Optional[str] = ""
     prompt: str = ""
+    negative_prompt: str = ""
+    guidance: float = 1.0
     n: int = 1
     size: str = "768x768"
     quality: str = "medium"
@@ -188,9 +190,13 @@ class InpaintRequest(BaseModel):
     image: str = ""
     mask: Optional[str] = ""
     prompt: str = ""
+    negative_prompt: str = ""
+    guidance: float = 1.0
     model: Optional[str] = ""
     strength: float = 0.75
     steps: int = 0
+    mode: str = "add"          # add | remove | color
+    color: str = "#0066ff"     # target color for mode=color
     width: Optional[int] = None
     height: Optional[int] = None
     request_id: Optional[str] = ""
@@ -200,6 +206,11 @@ class HarmonizeRequest(BaseModel):
     image: str = ""
     prompt: str = ""
     model: Optional[str] = ""
+    color_match: bool = True
+    seam_fix: bool = True
+    body_mask: Optional[str] = ""
+    seam_mask: Optional[str] = ""
+    mask: Optional[str] = ""
     strength: float = 0.5
     max_side: int = 1024
     steps: int = 0
@@ -336,14 +347,14 @@ def _resolve_image_model(requested):
     return reg.get("default_image_model", "") or (requested or "")
 
 
-def _try_real_generation(model_id, prompt, size, quality):
-    """Pokus o reálnu generáciu cez diffusion_server; None = fallback placeholder."""
+def _try_real_generation(model_id, prompt, size, quality, negative_prompt="", guidance=1.0, seed=1):
+    """Try torch diffusers, then the ONNX LCM pipeline. None = placeholder."""
     try:
         import diffusion_server as ds
         req_id = f"unified-{uuid.uuid4().hex[:8]}"
         req = ds.ImageRequest(model=model_id, prompt=prompt, size=size,
                               quality=quality, n=1, request_id=req_id)
-        # ensure_model_loaded robí vlastný lock + 503 pri load; tu len deleguj
+        # ensure_model_loaded does its own lock + 503 on load; just delegate here
         pixels = 0
         try:
             w, h = size.lower().split("x")
@@ -357,6 +368,24 @@ def _try_real_generation(model_id, prompt, size, quality):
             return imgs[0]["b64_json"]
     except Exception as e:
         logger.warning(f"real generation fallback: {str(e)[:160]}")
+
+    # ONNX LCM fallback (no torch/diffusers required)
+    try:
+        from unified.lcm_onnx_numpy import find_lcm_dir, generate_b64
+        d = find_lcm_dir()
+        if d is not None:
+            try:
+                w, h = size.lower().split("x")
+                side = max(256, min(512, max(int(w), int(h))))
+            except Exception:
+                side = 512
+            q = (quality or "medium").lower()
+            steps = 8 if q == "high" else (6 if q == "medium" else 4)
+            return generate_b64(d, prompt, negative_prompt=negative_prompt,
+                                guidance=float(guidance or 1.0), size=side,
+                                steps=steps, seed=seed)
+    except Exception as e:
+        logger.warning(f"onnx generation fallback failed: {str(e)[:200]}")
     return None
 
 
@@ -371,13 +400,30 @@ def generations(req: GenRequest):
     _release_vlm_best_effort()
     n = max(1, min(4, req.n or 1))
     data = []
-    for _ in range(n):
+    for i in range(n):
         b64 = _try_real_generation(model_id, req.prompt, req.size or "768x768",
-                                   req.quality or "medium")
+                                   req.quality or "medium",
+                                   req.negative_prompt, req.guidance,
+                                   seed=int(time.time()) + i * 7919)
         if not b64:
             b64 = _placeholder_png_b64()
         data.append({"b64_json": b64})
-    return {"created": int(time.time()), "data": data, "request_id": rid}
+    try:
+        w, h = (req.size or "768x768").lower().split("x")
+        side = max(256, min(512, max(int(w), int(h))))
+    except Exception:
+        side = 512
+    q = (req.quality or "medium").lower()
+    steps = 8 if q == "high" else (6 if q == "medium" else 4)
+    return {
+        "created": int(time.time()),
+        "data": data,
+        "request_id": rid,
+        "size": f"{side}x{side}",
+        "requested_size": req.size or "768x768",
+        "quality": q,
+        "steps": steps,
+    }
 
 
 @app.post("/v1/images/edits")
@@ -398,9 +444,26 @@ async def edits(
     except ModelLoadingError as e:
         return _raise_loading(e)
     _release_vlm_best_effort()
-    # V1: img2img cez reálnu pipeline ak je, inak placeholder (kontrakt drží tvar)
-    await image.read()
-    b64 = _try_real_generation(model_id, prompt or "edit", size, quality)
+    # img2img: ONNX LCM pipeline if available, otherwise placeholder
+    raw = await image.read()
+    b64 = None
+    try:
+        from unified.lcm_onnx_numpy import find_lcm_dir, img2img_b64
+        d = find_lcm_dir()
+        if d is not None and raw:
+            import base64 as _b64
+            try:
+                w, h = size.lower().split("x")
+                side = max(256, min(512, max(int(w), int(h))))
+            except Exception:
+                side = 512
+            steps = 6 if (quality or "medium") == "medium" else 4
+            b64 = img2img_b64(d, _b64.b64encode(raw).decode(), prompt or "edit",
+                              strength=float(strength or 0.75), size=side, steps=steps)
+    except Exception as e:
+        logger.warning(f"onnx img2img failed: {str(e)[:200]}")
+    if not b64:
+        b64 = _try_real_generation(model_id, prompt or "edit", size, quality)
     if not b64:
         b64 = _placeholder_png_b64(color=(30, 120, 200))
     return {"created": int(time.time()), "data": [{"b64_json": b64}], "request_id": rid}
@@ -418,9 +481,30 @@ def inpaint(req: InpaintRequest):
         return JSONResponse(status_code=400, content={"error": "missing image b64"})
     t0 = time.time()
     _release_vlm_best_effort()
-    # Reálna pipeline keď je engine naložený (masks = mazanie ľudí v pozadí),
-    # inak echo vstupu — kontrakt {image, elapsed, request_id} drží vždy.
+    # Real pipeline when the engine is loaded (masks = removing people in the background),
+    # otherwise echo the input — the contract {image, elapsed, request_id} always holds.
     if req.mask:
+        real = None
+        try:
+            from unified.lcm_onnx_numpy import find_lcm_dir, inpaint_b64
+            d = find_lcm_dir()
+            if d is not None:
+                try:
+                    w, h = (req.width, req.height) if (req.width and req.height) else (512, 512)
+                    side = max(256, min(512, max(int(w), int(h))))
+                except Exception:
+                    side = 512
+                steps = req.steps or 6
+                real = inpaint_b64(d, req.image, req.mask, req.prompt,
+                                   negative_prompt=req.negative_prompt,
+                                   guidance=float(req.guidance or 1.0),
+                                   strength=float(req.strength or 0.8),
+                                   size=side, steps=steps,
+                                   mode=req.mode or "add", color=req.color or "#0066ff")
+                return {"image": real, "elapsed": round(time.time() - t0, 2),
+                        "request_id": rid, "engine": "onnx-inpaint"}
+        except Exception as e:
+            logger.warning(f"onnx inpaint failed: {str(e)[:200]}")
         try:
             real = try_real_inpaint(req.image, req.mask, req.prompt, model_id,
                                     req.strength, req.steps)
@@ -447,7 +531,17 @@ def harmonize(req: HarmonizeRequest):
     if not req.image:
         return JSONResponse(status_code=400, content={"error": "missing image b64"})
     t0 = time.time()
-    return {"image": req.image, "elapsed": round(time.time() - t0, 2), "request_id": rid}
+    mask = req.mask or req.body_mask or req.seam_mask or ""
+    try:
+        from unified.lcm_onnx_numpy import harmonize_b64
+        out = harmonize_b64(req.image, mask, color_match=req.color_match,
+                            seam_fix=req.seam_fix, strength=req.strength)
+        return {"image": out, "elapsed": round(time.time() - t0, 2),
+                "request_id": rid, "engine": "cpu-harmonize"}
+    except Exception as e:
+        logger.warning(f"harmonize failed: {str(e)[:200]}")
+        return {"image": req.image, "elapsed": round(time.time() - t0, 2),
+                "request_id": rid, "engine": "echo"}
 
 
 @app.post("/v1/images/upscale")
@@ -491,7 +585,7 @@ def caption(req: CaptionRequest):
 
 
 def _chat_vision_parts(messages):
-    """Z OpenAI messages vytiahni (text, image_b64) poslednej user správy."""
+    """Extract (text, image_b64) from the last user message in OpenAI messages."""
     text, image = "", ""
     items = messages if isinstance(messages, list) else []
     for m in reversed(items):
@@ -529,7 +623,7 @@ def chat_completions(body: dict):
     text, image = _chat_vision_parts(messages)
     if not image:
         return JSONResponse(status_code=400, content={
-            "error": "missing image: V1 podporuje len vision správy (content s image_url data:base64)"})
+            "error": "missing image: V1 supports only vision messages (content with image_url data:base64)"})
     _release_sd_best_effort()
     try:
         out = caption_image_b64(image, text or "Describe the image in detail.",
@@ -662,10 +756,10 @@ async def transcriptions(
             if proxied is not None:
                 text, lang = proxied
                 engine = "whisper-service"
-                # nič lokálne nedržíme v RAM → gate hneď uvoľniť pre obrazy
+                # nothing is kept in RAM locally → release the gate immediately for images
                 _manager.unload("audio-proxied")
             else:
-                text, lang = "[unified stub — spusti WhisperApi službu alebo nainštaluj faster-whisper]", language
+                text, lang = "[unified stub — start the WhisperApi service or install faster-whisper]", language
                 engine = "stub"
         if response_format == "text":
             from fastapi.responses import PlainTextResponse
@@ -847,6 +941,49 @@ async def convert_audio_endpoint(
                 "size": info.get("format", {}).get("size"),
                 "format": info.get("format", {}).get("format_name"),
             }
+        }
+    except ValueError as e:
+        return JSONResponse(status_code=400, content={"error": str(e)[:200]})
+    except RuntimeError as e:
+        return JSONResponse(status_code=500, content={"error": str(e)[:200]})
+    finally:
+        try:
+            if tmp:
+                Path(tmp).unlink(missing_ok=True)
+        except Exception:
+            pass
+
+
+@app.post("/v1/ffmpeg/convert-image")
+async def convert_image_endpoint(
+    file: UploadFile = File(...),
+    preset: str = Form(default="jpg-95"),
+    request_id: str = Form(default=""),
+):
+    rid = request_id or "req-" + uuid.uuid4().hex[:8]
+    content = await file.read()
+    if not content:
+        return JSONResponse(status_code=400, content={"error": "Empty file"})
+    suffix = Path(file.filename or "image.png").suffix or ".png"
+    tmp = None
+    try:
+        with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as t:
+            tmp = t.name
+            t.write(content)
+        out_path, info = convert_image(Path(tmp), preset=preset)
+        out_b64 = base64.b64encode(Path(out_path).read_bytes()).decode()
+        try:
+            Path(out_path).unlink(missing_ok=True)
+        except Exception:
+            pass
+        return {
+            "file": out_b64,
+            "filename": Path(out_path).name,
+            "request_id": rid,
+            "info": {
+                "size": info.get("format", {}).get("size"),
+                "format": info.get("format", {}).get("format_name"),
+            },
         }
     except ValueError as e:
         return JSONResponse(status_code=400, content={"error": str(e)[:200]})
@@ -1042,9 +1179,14 @@ class InstallRequest(BaseModel):
 
 @app.get("/v1/models/catalog")
 def models_catalog():
-    """Katalóg inštalovateľných modelov + stav (installed/downloading/…)."""
+    """Catalog of installable models + state (installed/downloading/…)."""
     try:
-        return {"models": _mm.catalog()}
+        return {
+            "models": _mm.catalog(),
+            "kinds": [
+                {"id": k, "label": v} for k, v in _mm.KIND_LABELS.items()
+            ],
+        }
     except Exception as e:
         return JSONResponse(status_code=500, content={"error": str(e)[:200]})
 
@@ -1069,11 +1211,44 @@ def models_uninstall(req: InstallRequest):
         return JSONResponse(status_code=500, content={"error": str(e)[:200]})
 
 
+@app.get("/v1/models/progress/{model_id}")
+def models_progress(model_id: str):
+    """Same shape as Android /v1/models/progress/{id}."""
+    try:
+        return _mm.progress(model_id)
+    except KeyError as e:
+        return JSONResponse(status_code=404, content={"error": str(e).strip("'")})
+
+
+@app.get("/v1/models/status/{model_id}")
+def models_status(model_id: str):
+    try:
+        return _mm.status(model_id)
+    except KeyError as e:
+        return JSONResponse(status_code=404, content={"error": str(e).strip("'")})
+
+
+@app.post("/v1/models/verify/{model_id}")
+def models_verify(model_id: str):
+    try:
+        return _mm.verify(model_id)
+    except KeyError as e:
+        return JSONResponse(status_code=404, content={"error": str(e).strip("'")})
+
+
+@app.post("/v1/models/cancel")
+def models_cancel(req: InstallRequest):
+    try:
+        return _mm.cancel(req.id)
+    except KeyError as e:
+        return JSONResponse(status_code=404, content={"error": str(e).strip("'")})
+
+
 
 
 @app.get("/v1/settings")
 def settings_info():
-    """Runtime info pre WebUI Settings tab (read-only, žiadne tajomstvá)."""
+    """Runtime info for the WebUI Settings tab (read-only, no secrets)."""
     import shutil as _sh
     torch_ok = False
     cuda = False
@@ -1111,6 +1286,8 @@ from unified import model_finder as _mf
 class AddModelRequest(BaseModel):
     repo_id: str = ""
     name: str = ""
+    url: str = ""
+    kind: str = "custom"
 
 
 class DeleteModelRequest(BaseModel):
@@ -1136,6 +1313,8 @@ def models_custom():
 @app.post("/v1/models/add")
 def models_add(req: AddModelRequest):
     try:
+        if req.url.strip():
+            return _mf.start_add_url(req.url, req.name, req.kind)
         return _mf.start_add(req.repo_id, req.name)
     except ValueError as e:
         return JSONResponse(status_code=400, content={"error": str(e)})

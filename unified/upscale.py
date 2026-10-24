@@ -1,9 +1,9 @@
-"""Upscale — Real-ESRGAN-x4v3 (RRDBNet) keď sú váha + torch, inak Pillow LANCZOS.
+"""Upscale — Real-ESRGAN-x4v3 (RRDBNet) when weights + torch exist, else Pillow LANCZOS.
 
-Váha: models/RealESRGAN_x4v3/RealESRGAN_x4plus.pth (BSD-3-Clause, 67 MB,
-`download_models.py --preset upscale`). Dlaždicová inferencia (tile 256,
-prekryv 16) drží VRAM dole — rovnaký vzor ako NCNN dlaždice na mobile.
-DoS cap 8192px na stranu. scale 2/3: ESRGAN je x4 → výsledok sa downsampluje.
+Weights: models/RealESRGAN_x4v3/RealESRGAN_x4plus.pth (BSD-3-Clause, 67 MB,
+`download_models.py --preset upscale`). Tiled inference (tile 256,
+overlap 16) keeps VRAM low — same pattern as NCNN tiles on mobile.
+DoS cap 8192px per side. scale 2/3: ESRGAN is x4 → the result is downsampled.
 """
 import base64
 import io
@@ -133,7 +133,7 @@ def _esrgan_upscale(img: Image.Image, weight: Path) -> Image.Image:
                 sr = net(t).clamp(0, 1).squeeze(0).permute(1, 2, 0)
                 sr = (sr.cpu().numpy() * 255.0 + 0.5).astype("uint8")
                 sr_img = Image.fromarray(sr)
-                # orez prekryvu späť na čistú dlaždicu
+                # crop the overlap back to a clean tile
                 ox1, oy1 = (x - x1) * 4, (y - y1) * 4
                 cw = (min(x + tile - overlap, w) - x) * 4
                 ch = (min(y + tile - overlap, h) - y) * 4

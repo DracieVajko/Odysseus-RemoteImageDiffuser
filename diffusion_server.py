@@ -666,7 +666,7 @@ def _discover_models() -> dict:
     stays the source of truth, confirm the profile there.
     """
     found = {}
-    # Adresáre, ktoré nie sú difúzne váhy (VLM, upscale) — auto-discovery ich ignoruje.
+# Directories that are not diffusion weights (VLM, upscale) — auto-discovery ignores them.
     NON_DIFFUSION_DIRS = {"SmolVLM_500M", "RealESRGAN_x4v3", "Vision", "Upscale", "VLM"}
     try:
         models_dir = Path(__file__).resolve().parent / "models"

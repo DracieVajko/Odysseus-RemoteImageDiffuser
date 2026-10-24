@@ -24,11 +24,12 @@ edittest*.png
 safetytest*.png
 vis-*.png
 output/
+ffmpeg2pass-0.log*
 
 # Local machine config (copy models.json.example -> models.json and adjust)
 models.json
 
-# C++ third-party zdroje (klonuje fetch skript, nie sú v gite)
+# C++ third-party sources (cloned by the fetch script, not in git)
 android/app/src/main/cpp/third_party/
 
 # OS / editors
@@ -37,7 +38,7 @@ Desktop.ini
 .vscode/
 .idea/
 
-# Android (Studio lokálky + build výstupy, nikdy necommitovať)
+# Android (Studio local files + build outputs, never commit)
 android/local.properties
 android/.gradle/
 android/.idea/

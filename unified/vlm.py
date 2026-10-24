@@ -1,9 +1,9 @@
-"""VLM caption (V2) — SmolVLM-500M-Instruct cez transformers, lazy.
+"""VLM caption (V2) — SmolVLM-500M-Instruct via transformers, lazy.
 
-Váha: models/SmolVLM_500M/ (`download_models.py --preset vlm`, ~1 GB, Apache-2.0).
-Bez váhy: EngineMissing → endpoint vráti 503 will-not-load (nie 500).
-Prepnutie motorov (SD↔VLM) rieši unified_server cez release_vlm() /
-diffusion_server.unload_current_model() — vždy max 1 ťažký model.
+Weights: models/SmolVLM_500M/ (`download_models.py --preset vlm`, ~1 GB, Apache-2.0).
+Without weights: EngineMissing → the endpoint returns 503 will-not-load (not 500).
+Engine switching (SD↔VLM) is handled by unified_server via release_vlm() /
+diffusion_server.unload_current_model() — always at most 1 heavy model.
 """
 import base64
 import io
@@ -102,7 +102,7 @@ def caption_image_b64(image_b64: str, prompt: str = "Describe the image in detai
     import torch
     messages = [{"role": "user", "content": [
         {"type": "image"}, {"type": "text", "text": prompt or "Describe the image."}]}]
-    # Šablóna vyrobí text s <image> tokenom; obraz sa pasuje zvlášť (nie return_dict).
+    # The template produces text with an <image> token; the image is passed separately (not return_dict).
     text_in = proc.apply_chat_template(messages, add_generation_prompt=True)
     inputs = proc(text=text_in, images=[img], return_tensors="pt").to(device)
     with torch.no_grad():

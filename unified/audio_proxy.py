@@ -1,4 +1,4 @@
-"""Forward prepis na bežiacu WhisperApi službu (má vlastný faster-whisper env)."""
+"""Forward transcription to a running WhisperApi service (own faster-whisper env)."""
 import io
 import json
 import logging

@@ -1,4 +1,4 @@
-"""Registry — models.json (obrazy) + Whisper zoznam (audio) ako jeden zdroj."""
+"""Registry — models.json (images) + Whisper list (audio) as one source."""
 import json
 from pathlib import Path
 

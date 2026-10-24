@@ -1,9 +1,10 @@
-"""FFmpeg tools — konverzie, kompresia, extrakcia, trim, resize.
+"""FFmpeg tools — conversions, compression, extraction, trim, resize.
 
-Presety pre bežné úlohy. Každá funkcia vracia (output_path, info_dict).
+Presets for common tasks. Each function returns (output_path, info_dict).
 """
 import json
 import logging
+import os
 import subprocess
 import tempfile
 from pathlib import Path
@@ -11,22 +12,22 @@ from typing import Optional, Dict, List, Tuple
 
 logger = logging.getLogger(__name__)
 
-# Presety pre video konverziu
+# Video conversion presets
 VIDEO_PRESETS = {
     "mp4-h264": {
-        "desc": "MP4 H.264 (univerzálny, web/kompatibilita)",
+        "desc": "MP4 H.264 (universal, web/compatibility)",
         "vcodec": "libx264", "acodec": "aac",
         "crf": 23, "preset": "medium", "audio_bitrate": "128k",
         "ext": ".mp4",
     },
     "mp4-h265": {
-        "desc": "MP4 H.265/HEVC (menšie súbory, novšie zariadenia)",
+        "desc": "MP4 H.265/HEVC (smaller files, newer devices)",
         "vcodec": "libx265", "acodec": "aac",
         "crf": 28, "preset": "medium", "audio_bitrate": "128k",
         "ext": ".mp4",
     },
     "mp4-small": {
-        "desc": "MP4 malý (CRF 32, pomalé, pre zdieľanie)",
+        "desc": "MP4 small (CRF 32, slow, for sharing)",
         "vcodec": "libx264", "acodec": "aac",
         "crf": 32, "preset": "slow", "audio_bitrate": "96k",
         "ext": ".mp4",
@@ -37,35 +38,69 @@ VIDEO_PRESETS = {
         "crf": 32, "preset": None, "audio_bitrate": "128k",
         "ext": ".webm",
     },
+    "mp4-h264-hq": {
+        "desc": "MP4 H.264 high quality (CRF 18, slow)",
+        "vcodec": "libx264", "acodec": "aac", "crf": 18,
+        "preset": "slow", "audio_bitrate": "192k", "ext": ".mp4",
+    },
+    "mp4-h264-fast": {
+        "desc": "MP4 H.264 fast (CRF 28, veryfast)",
+        "vcodec": "libx264", "acodec": "aac", "crf": 28,
+        "preset": "veryfast", "audio_bitrate": "128k", "ext": ".mp4",
+    },
+    "mp4-h265-hq": {
+        "desc": "MP4 H.265 high quality (CRF 24)",
+        "vcodec": "libx265", "acodec": "aac", "crf": 24,
+        "preset": "medium", "audio_bitrate": "192k", "ext": ".mp4",
+    },
+    "mp4-h265-fast": {
+        "desc": "MP4 H.265 fast (CRF 30)",
+        "vcodec": "libx265", "acodec": "aac", "crf": 30,
+        "preset": "fast", "audio_bitrate": "128k", "ext": ".mp4",
+    },
+    "mp4-discord": {
+        "desc": "MP4 for Discord (<10 MB)",
+        "vcodec": "libx264", "acodec": "aac", "crf": 30,
+        "preset": "fast", "audio_bitrate": "96k", "ext": ".mp4",
+        "max_size_mb": 10,
+    },
     "gif": {
-        "desc": "GIF (animácia, max 15s, 480px)",
+        "desc": "GIF (animation, max 15s, 480px)",
         "vcodec": "gif", "acodec": None,
         "crf": None, "preset": None, "audio_bitrate": None,
         "ext": ".gif", "max_duration": 15, "scale": 480,
     },
 }
 
-# Presety pre audio konverziu
+# Audio conversion presets
 AUDIO_PRESETS = {
     "mp3-128": {
-        "desc": "MP3 128 kbps (štandard)",
+        "desc": "MP3 128 kbps (standard)",
         "acodec": "libmp3lame", "audio_bitrate": "128k", "ext": ".mp3",
     },
+    "mp3-192": {
+        "desc": "MP3 192 kbps (balanced)",
+        "acodec": "libmp3lame", "audio_bitrate": "192k", "ext": ".mp3",
+    },
     "mp3-320": {
-        "desc": "MP3 320 kbps (vysoká kvalita)",
+        "desc": "MP3 320 kbps (high quality)",
         "acodec": "libmp3lame", "audio_bitrate": "320k", "ext": ".mp3",
     },
     "aac-128": {
-        "desc": "AAC 128 kbps (Apple/Android kompatibilný)",
+        "desc": "AAC 128 kbps (Apple/Android compatible)",
         "acodec": "aac", "audio_bitrate": "128k", "ext": ".m4a",
     },
+    "aac-192": {
+        "desc": "AAC 192 kbps (high quality)",
+        "acodec": "aac", "audio_bitrate": "192k", "ext": ".m4a",
+    },
     "wav-16k": {
-        "desc": "WAV 16 kHz mono (pre Whisper)",
+        "desc": "WAV 16 kHz mono (for Whisper)",
         "acodec": "pcm_s16le", "audio_bitrate": None,
         "ar": 16000, "ac": 1, "ext": ".wav",
     },
     "opus": {
-        "desc": "Opus (malý, vysoká kvalita)",
+        "desc": "Opus (small, high quality)",
         "acodec": "libopus", "audio_bitrate": "96k", "ext": ".opus",
     },
     "flac": {
@@ -74,7 +109,16 @@ AUDIO_PRESETS = {
     },
 }
 
-# Presety pre resize
+# Image presets (single-frame conversion)
+IMAGE_PRESETS = {
+    "jpg-95": {"desc": "JPG quality 95 (max)", "vcodec": "mjpeg", "qscale": 2, "ext": ".jpg"},
+    "jpg-85": {"desc": "JPG quality 85 (smaller)", "vcodec": "mjpeg", "qscale": 4, "ext": ".jpg"},
+    "png": {"desc": "PNG (lossless)", "vcodec": "png", "ext": ".png"},
+    "webp": {"desc": "WebP (small, high quality)", "vcodec": "libwebp", "qscale": 2, "ext": ".webp"},
+    "avif": {"desc": "AVIF (smallest)", "vcodec": "libaom-av1", "crf": 30, "ext": ".avif"},
+}
+
+# Presets for resize
 RESIZE_PRESETS = {
     "480p": {"width": 854, "height": 480, "desc": "480p (SD)"},
     "720p": {"width": 1280, "height": 720, "desc": "720p (HD)"},
@@ -138,6 +182,8 @@ def convert_video(
         cmd += ["-crf", str(p["crf"])]
     if p.get("preset"):
         cmd += ["-preset", p["preset"]]
+    if p.get("max_size_mb"):
+        cmd += ["-fs", f"{int(p['max_size_mb'])}M"]
     
     # Audio codec
     if p.get("acodec"):
@@ -338,12 +384,14 @@ def compress_video(
     video_bitrate = (target_bits / duration) - audio_bitrate
     video_bitrate = max(video_bitrate, 100000)  # min 100 kbps
     
-    # Two-pass encoding
+    # Two-pass encoding; keep the pass log next to the temporary output so it
+    # never lands in the server's working directory.
+    passlog = str(output_path.with_name(output_path.stem + "_passlog"))
     pass1 = [
         "ffmpeg", "-y", "-hide_banner", "-loglevel", "error",
         "-i", str(input_path),
         "-c:v", "libx264", "-b:v", str(int(video_bitrate)),
-        "-pass", "1", "-an", "-f", "null", "NUL" if True else "/dev/null"
+        "-pass", "1", "-passlogfile", passlog, "-an", "-f", "null", os.devnull
     ]
     
     pass2 = [
@@ -351,7 +399,7 @@ def compress_video(
         "-i", str(input_path),
         "-c:v", "libx264", "-b:v", str(int(video_bitrate)),
         "-c:a", "aac", "-b:a", "128k",
-        "-pass", "2", str(output_path)
+        "-pass", "2", "-passlogfile", passlog, str(output_path)
     ]
     
     logger.info(f"Compressing to ~{target_size_mb}MB: {video_bitrate/1000:.0f}kbps video")
@@ -365,10 +413,37 @@ def compress_video(
     return output_path, info
 
 
+def convert_image(
+    input_path: Path,
+    preset: str = "jpg-95",
+    output_path: Optional[Path] = None,
+) -> Tuple[Path, dict]:
+    """Convert a single image with an image preset."""
+    if preset not in IMAGE_PRESETS:
+        raise ValueError(f"Unknown preset: {preset}. Available: {list(IMAGE_PRESETS.keys())}")
+    p = IMAGE_PRESETS[preset]
+    if output_path is None:
+        output_path = input_path.parent / f"{input_path.stem}_{preset}{p['ext']}"
+    cmd = ["ffmpeg", "-y", "-hide_banner", "-loglevel", "error", "-i", str(input_path),
+           "-frames:v", "1", "-c:v", p["vcodec"]]
+    if p.get("qscale") is not None:
+        cmd += ["-q:v", str(p["qscale"])]
+    if p.get("crf") is not None:
+        cmd += ["-crf", str(p["crf"])]
+    cmd += [str(output_path)]
+    logger.info(f"Converting image: {' '.join(cmd)}")
+    try:
+        subprocess.run(cmd, check=True, timeout=120)
+    except subprocess.CalledProcessError as e:
+        raise RuntimeError(f"FFmpeg image conversion failed: {e}")
+    return output_path, get_media_info(output_path)
+
+
 def get_presets() -> dict:
     """Return all available presets."""
     return {
         "video": VIDEO_PRESETS,
         "audio": AUDIO_PRESETS,
+        "image": IMAGE_PRESETS,
         "resize": RESIZE_PRESETS,
     }

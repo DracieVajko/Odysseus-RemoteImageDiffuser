@@ -20,6 +20,18 @@ from pathlib import Path
 
 BASE = Path(__file__).resolve().parent / "models"
 
+# Cancellation flags (model_id -> set by models_manager.cancel)
+_CANCEL: set = set()
+
+
+class CancelledError(Exception):
+    pass
+
+
+def _check_cancel(task_id: str):
+    if task_id in _CANCEL:
+        raise CancelledError(f"cancelled: {task_id}")
+
 TASKS = [
     {"id": "DreamShaper_8", "kind": "snapshot", "repo": "Lykon/dreamshaper-8",
      "target": "DreamShaper_8", "min_gb": 2.0,
@@ -57,7 +69,7 @@ PRESETS = {
 }
 
 # VLM (V2): HuggingFaceTB SmolVLM-500M-Instruct (~1 GB, Apache-2.0).
-# Snapshot ako SD modely; server používa transformers AutoModelForImageTextToText.
+# Snapshot like SD models; the server uses transformers AutoModelForImageTextToText.
 VLM_TASKS = [
     {"id": "SmolVLM_500M", "kind": "snapshot", "repo": "HuggingFaceTB/SmolVLM-500M-Instruct",
      "target": "SmolVLM_500M", "min_gb": 0.8,
@@ -66,9 +78,9 @@ VLM_TASKS = [
      "license": "Apache-2.0 (see repo card)"},
 ]
 
-# Upscale váhy (malé, sťahujú sa aj do mobilného balíčka cez ModelDownloader).
-# RealESRGAN_x4plus.pth: x4, všeobecné foto (BSD-3-Clause, xinntao/Real-ESRGAN,
-# stabilný GitHub release asset — na HF nie je oficiálne repo s touto váhou).
+# Upscale weights (small, also downloaded to the mobile package via ModelDownloader).
+# RealESRGAN_x4plus.pth: x4, general photos (BSD-3-Clause, xinntao/Real-ESRGAN,
+# stable GitHub release asset — no official HF repo for this weight).
 UPSCALE_TASKS = [
     {"id": "RealESRGAN_x4v3", "kind": "url",
      "url": "https://github.com/xinntao/Real-ESRGAN/releases/download/v0.1.0/RealESRGAN_x4plus.pth",
@@ -113,6 +125,7 @@ def download_url(task):
             tmp = dest.with_suffix(dest.suffix + ".part")
             with open(tmp, "wb") as f:
                 for chunk in r.iter_content(chunk_size=8 * 1024 * 1024):
+                    _check_cancel(task["id"])
                     if chunk:
                         f.write(chunk)
                         done += len(chunk)
@@ -145,10 +158,19 @@ def download_hf(task):
 
         run_with_retries(_dl, task["id"])
     else:
+        import fnmatch
+        from huggingface_hub import list_repo_files
         print(f"[{task['id']}] snapshot {task['repo']} -> {target} ...", flush=True)
-        run_with_retries(
-            lambda: snapshot_download(task["repo"], local_dir=str(target),
-                                      allow_patterns=task["allow"]), task["id"])
+        allow = task.get("allow") or ["*"]
+        all_files = run_with_retries(lambda: list_repo_files(task["repo"]), task["id"])
+        files = [f for f in all_files if any(fnmatch.fnmatch(f, pat) for pat in allow)]
+        print(f"[{task['id']}] {len(files)} files", flush=True)
+        for rel in files:
+            _check_cancel(task["id"])
+            run_with_retries(
+                lambda rel=rel: hf_hub_download(task["repo"], rel, local_dir=str(target)),
+                task["id"],
+            )
     size = dir_size_gb(target)
     if size < task["min_gb"]:
         raise RuntimeError(f"downloaded only {size:.2f} GB, expected >= {task['min_gb']} GB")

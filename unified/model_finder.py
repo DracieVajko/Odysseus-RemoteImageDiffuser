@@ -1,8 +1,8 @@
 """Model finder (HuggingFace search) + custom model add + delete.
 
-Bezpečnostné pravidlo: add/delete pracujú výhradne pod models/.
-Delete odmietne zmazať katalógový model (na to je /v1/models/uninstall),
-aby náhodný klik neodstránil 19 GB základných váh.
+Security rule: add/delete work exclusively under models/.
+Delete refuses to remove a catalog model (use /v1/models/uninstall for that),
+so an accidental click cannot remove 19 GB of base weights.
 """
 import logging
 import shutil
@@ -27,7 +27,7 @@ def _hf_get(url: str, timeout=20):
 
 
 def search_hf(query: str, limit: int = 20, filter_task: str = "") -> dict:
-    """Hľadá modely na HuggingFace (server-side, bez CORS problémov)."""
+    """Search models on HuggingFace (server-side, no CORS issues)."""
     q = (query or "").strip()
     params = {"search": q, "limit": str(max(1, min(50, limit))), "full": "false"}
     if filter_task:
@@ -60,7 +60,7 @@ def _catalog_ids() -> set:
 
 
 def _custom_dirs() -> list:
-    """Adresáre v models/, ktoré nie sú registrované v models.json ani katalógu."""
+    """Directories under models/ that are not registered in models.json or the catalog."""
     import json as _json
     known = set()
     try:
@@ -71,7 +71,7 @@ def _custom_dirs() -> list:
                 known.add(Path(p).parts[-2] if Path(p).is_file() else Path(p).name)
     except Exception:
         pass
-    # Katalógové modely (download_models.py) tiež nie sú "custom".
+    # Catalog models (download_models.py) are also not "custom".
     try:
         import download_models as dm
         for t in (dm.TASKS + dm.UPSCALE_TASKS + dm.VLM_TASKS):
@@ -110,6 +110,60 @@ def start_add(repo_id: str, name: str = "") -> dict:
     return {"id": target_name, "repo_id": rid, "state": "downloading"}
 
 
+def start_add_url(url: str, name: str = "", kind: str = "custom") -> dict:
+    """Direct URL (GGUF/ONNX/bin/safetensors) — same contract as Android."""
+    u = (url or "").strip()
+    if not (u.startswith("http://") or u.startswith("https://")):
+        raise ValueError("url must be http(s)")
+    file_name = urllib.parse.urlparse(u).path.rsplit("/", 1)[-1] or "model.bin"
+    target_name = (name or file_name.rsplit(".", 1)[0])
+    target_name = target_name.replace("..", "").replace("/", "_").replace("\\", "_").strip()
+    if not target_name:
+        raise ValueError("empty model name")
+    if target_name in _catalog_ids():
+        raise ValueError(f"'{target_name}' is a catalog model; use /v1/models/install")
+    key = f"custom:{target_name}"
+    if _search_state.get(key, {}).get("state") == "downloading":
+        return {"id": target_name, "state": "downloading", "already_running": True}
+    _search_state[key] = {"state": "downloading", "progress": 1, "error": ""}
+    threading.Thread(
+        target=_run_add_url, args=(u, target_name, file_name, key, kind), daemon=True
+    ).start()
+    return {"id": target_name, "url": u, "kind": kind, "state": "downloading"}
+
+
+def _run_add_url(url: str, target_name: str, file_name: str, key: str, kind: str):
+    try:
+        dest_dir = MODELS_DIR / target_name
+        dest_dir.mkdir(parents=True, exist_ok=True)
+        dest = dest_dir / file_name
+        part = dest_dir / (file_name + ".part")
+        req = urllib.request.Request(url, headers={"User-Agent": "odysseus-unified"})
+        with urllib.request.urlopen(req, timeout=60) as r, open(part, "wb") as f:
+            total = int(r.headers.get("Content-Length") or 0)
+            done = 0
+            while True:
+                chunk = r.read(1024 * 256)
+                if not chunk:
+                    break
+                f.write(chunk)
+                done += len(chunk)
+                if total:
+                    _search_state[key] = {
+                        "state": "downloading",
+                        "progress": max(1, int(done * 100 / total)),
+                        "error": "",
+                    }
+        if dest.exists():
+            dest.unlink()
+        part.rename(dest)
+        _search_state[key] = {"state": "done", "progress": 100, "error": ""}
+        logger.info("custom url model %s ready (%s)", target_name, kind)
+    except Exception as e:
+        logger.warning("add url %s failed: %s", url, e)
+        _search_state[key] = {"state": "error", "progress": 0, "error": str(e)[:300]}
+
+
 def _run_add(repo_id: str, target_name: str, key: str):
     try:
         from huggingface_hub import snapshot_download
@@ -133,7 +187,7 @@ def add_state(name: str) -> dict:
 
 
 def delete_custom(name: str) -> dict:
-    """Zmaže models/<name>. Odmietne katalógové modely a cesty mimo models/."""
+    """Delete models/<name>. Refuses catalog models and paths outside models/."""
     if not name or "/" in name or "\\" in name or name in (".", ".."):
         raise ValueError("invalid model name")
     if name in _catalog_ids():

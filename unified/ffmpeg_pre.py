@@ -1,4 +1,4 @@
-"""Audio/video normalizácia — ffmpeg ak je, inak passthrough wav."""
+"""Audio/video normalization — ffmpeg if available, otherwise passthrough wav."""
 import shutil
 import subprocess
 from pathlib import Path
@@ -41,7 +41,7 @@ def normalize_audio_to_wav16k(src: Path, dst: Path) -> dict:
         )
         if r.returncode == 0 and dst.exists():
             return {"path": str(dst), "via": "ffmpeg"}
-    # passthrough (wav alebo bez ffmpeg): skopíruj
+    # passthrough (wav or no ffmpeg): copy
     dst.parent.mkdir(parents=True, exist_ok=True)
     dst.write_bytes(src.read_bytes())
     return {"path": str(dst), "via": "passthrough"}

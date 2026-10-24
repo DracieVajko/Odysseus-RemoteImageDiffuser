@@ -5,34 +5,43 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Unified Standalone WebUI</title>
 <style>
-:root { color-scheme: dark; }
-body { font-family: system-ui, Segoe UI, Arial, sans-serif; background: #14161a; color: #e8eaf0; margin: 0; }
-header { padding: 12px 16px; background: #1d2127; border-bottom: 1px solid #333; display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
+:root {
+  color-scheme: dark;
+  --bg: var(--bg); --panel: var(--panel); --panel2: var(--panel2); --input: var(--input);
+  --text: var(--text); --muted: var(--muted); --border: var(--border); --border2: var(--border2);
+}
+:root.light {
+  color-scheme: light;
+  --bg: #f6f8fa; --panel: #ffffff; --panel2: #eaeef2; --input: #ffffff;
+  --text: #1f2328; --muted: #57606a; --border: #d0d7de; --border2: #d0d7de;
+}
+body { font-family: system-ui, Segoe UI, Arial, sans-serif; background: var(--bg); color: var(--text); margin: 0; }
+header { padding: 12px 16px; background: var(--panel); border-bottom: 1px solid var(--border); display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
 header h1 { font-size: 18px; margin: 0; }
-#status { font-size: 13px; color: #9fb3c8; }
+#status { font-size: 13px; color: var(--muted); }
 #status b.ok { color: #7ee787; } #status b.bad { color: #ff7b72; }
 main { display: grid; grid-template-columns: 400px 1fr; gap: 16px; padding: 16px; }
 @media (max-width: 900px) { main { grid-template-columns: 1fr; } }
-.panel { background: #1d2127; border: 1px solid #333; border-radius: 8px; padding: 14px; }
+.panel { background: var(--panel); border: 1px solid var(--border); border-radius: 8px; padding: 14px; }
 .tabs { display: flex; gap: 6px; margin-bottom: 12px; flex-wrap: wrap; }
-.tabs button { flex: 1; min-width: 70px; padding: 8px 4px; font-size: 12px; border-radius: 6px; border: 1px solid #444; background: #262b33; color: #fff; cursor: pointer; }
+.tabs button { flex: 1; min-width: 70px; padding: 8px 4px; font-size: 12px; border-radius: 6px; border: 1px solid var(--border2); background: var(--panel2); color: #fff; cursor: pointer; }
 .tabs button.active { background: #2f81f7; border-color: #2f81f7; }
-label { display: block; font-size: 13px; margin: 10px 0 4px; color: #9fb3c8; }
-input[type=text], textarea, select { width: 100%; box-sizing: border-box; background: #0f1114; color: #fff; border: 1px solid #444; border-radius: 6px; padding: 8px; }
+label { display: block; font-size: 13px; margin: 10px 0 4px; color: var(--muted); }
+input[type=text], textarea, select { width: 100%; box-sizing: border-box; background: var(--input); color: #fff; border: 1px solid var(--border2); border-radius: 6px; padding: 8px; }
 textarea { min-height: 70px; resize: vertical; }
-.row { display: flex; gap: 8px; } .row > div { flex: 1; }
+.row { display: flex; gap: 8px; flex-wrap: wrap; align-items: flex-start; } .row > div { flex: 1; min-width: 120px; }
 button.go { width: 100%; margin-top: 12px; padding: 10px; font-size: 15px; border: 0; border-radius: 6px; background: #238636; color: #fff; cursor: pointer; }
 button.go:disabled { opacity: .5; cursor: wait; }
 #warn { background: #5a2d0c; border: 1px solid #a35c00; border-radius: 6px; padding: 8px 10px; font-size: 13px; margin-bottom: 10px; display: none; }
 #gallery { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 12px; }
-figure { margin: 0; background: #1d2127; border: 1px solid #333; border-radius: 8px; overflow: hidden; }
+figure { margin: 0; background: var(--panel); border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
 figure img { width: 100%; display: block; }
-figcaption { font-size: 12px; padding: 8px 10px; color: #9fb3c8; word-break: break-word; }
+figcaption { font-size: 12px; padding: 8px 10px; color: var(--muted); word-break: break-word; }
 figcaption a { color: #2f81f7; }
-#log { font-size: 12px; white-space: pre-wrap; background: #0f1114; border: 1px solid #333; border-radius: 6px; padding: 8px; min-height: 60px; margin-top: 10px; }
-img.preview { max-width: 100%; border-radius: 6px; border: 1px solid #444; margin-top: 6px; }
-canvas#maskpad { width: 100%; border-radius: 6px; border: 1px solid #444; cursor: crosshair; touch-action: none; }
-#txtout { font-size: 14px; background: #0f1114; border: 1px solid #333; border-radius: 6px; padding: 10px; margin-top: 10px; white-space: pre-wrap; min-height: 40px; }
+#log { font-size: 12px; white-space: pre-wrap; background: var(--input); border: 1px solid var(--border); border-radius: 6px; padding: 8px; min-height: 60px; max-height: 220px; overflow-y: auto; user-select: text; margin-top: 6px; }
+img.preview { max-width: 100%; border-radius: 6px; border: 1px solid var(--border2); margin-top: 6px; }
+canvas#maskpad { width: 100%; border-radius: 6px; border: 1px solid var(--border2); cursor: crosshair; touch-action: none; }
+#txtout { font-size: 14px; background: var(--input); border: 1px solid var(--border); border-radius: 6px; padding: 10px; margin-top: 10px; white-space: pre-wrap; min-height: 40px; }
 
 @media (max-width: 520px) {
   .tabs button { font-size: 10px; min-width: 56px; padding: 7px 2px; }
@@ -45,7 +54,8 @@ canvas#maskpad { width: 100%; border-radius: 6px; border: 1px solid #444; cursor
 <header>
 <h1>Unified Standalone WebUI</h1>
 <span id="status">connecting…</span>
-<button onclick="refresh()" style="margin-left:auto;padding:6px 12px;border-radius:6px;border:1px solid #444;background:#262b33;color:#fff;cursor:pointer">Refresh</button>
+<button onclick="refresh()" style="margin-left:auto;padding:6px 12px;border-radius:6px;border:1px solid var(--border2);background:var(--panel2);color:#fff;cursor:pointer">Refresh</button>
+<button id="themeBtn" onclick="toggleTheme()" style="margin-left:auto;padding:6px 12px;border-radius:6px;border:1px solid var(--border2);background:var(--panel2);color:var(--text);cursor:pointer">Light</button>
 </header>
 <main>
 <div class="panel">
@@ -67,10 +77,16 @@ canvas#maskpad { width: 100%; border-radius: 6px; border: 1px solid #444; cursor
 <div id="formTxt">
 <label>Prompt</label>
 <textarea id="prompt" placeholder="a cozy mountain cabin at sunset, pine forest, detailed"></textarea>
+<label>Negative prompt</label>
+<textarea id="negprompt" placeholder="blurry, low quality, distorted, watermark"></textarea>
 <div class="row">
-<div><label>Size</label><select id="size"><option>512x512</option><option selected>768x768</option><option>1024x1024</option></select></div>
+<div><label>Resolution</label><select id="size" onchange="toggleCustom('size','sizecustom')">
+<option>256x256</option><option selected>512x512</option><option>768x768</option><option>1024x1024</option><option value="custom">custom…</option></select>
+<input id="sizecustom" type="text" placeholder="WxH (e.g. 640x384)" style="display:none"></div>
 <div><label>Quality</label><select id="quality"><option value="low">low (fast)</option><option value="medium" selected>medium</option><option value="high">high (slow)</option></select></div>
 </div>
+<label>Guidance (1.0 = LCM; &gt;1 uses the negative prompt, slower)</label>
+<input type="number" id="guidance" value="1.0" min="1" max="3" step="0.1" style="width:100%">
 <button class="go" id="btnTxt" onclick="generateTxt()">Generate</button>
 </div>
 
@@ -80,10 +96,16 @@ canvas#maskpad { width: 100%; border-radius: 6px; border: 1px solid #444; cursor
 <img id="refprev" class="preview" style="display:none">
 <label>Prompt (what to change / style)</label>
 <textarea id="prompt2" placeholder="same cabin in winter, snow, night lights"></textarea>
+<label>Negative prompt</label>
+<textarea id="negprompt2" placeholder="blurry, low quality, distorted"></textarea>
 <div class="row">
-<div><label>Size</label><select id="size2"><option>512x512</option><option selected>768x768</option><option>1024x1024</option></select></div>
+<div><label>Resolution</label><select id="size2" onchange="toggleCustom('size2','sizecustom2')">
+<option>256x256</option><option selected>512x512</option><option>768x768</option><option>1024x1024</option><option value="custom">custom…</option></select>
+<input id="sizecustom2" type="text" placeholder="WxH" style="display:none"></div>
 <div><label>Quality</label><select id="quality2"><option value="low">low</option><option value="medium" selected>medium</option><option value="high">high</option></select></div>
 </div>
+<label>Guidance</label>
+<input type="number" id="guidance2" value="1.0" min="1" max="3" step="0.1" style="width:100%">
 <label>Change strength: <span id="strval">0.75</span></label>
 <input type="range" id="strength" min="0.1" max="1" step="0.05" value="0.75" style="width:100%" oninput="document.getElementById('strval').textContent=this.value">
 <button class="go" id="btnImg" onclick="generateImg()">Generate from reference</button>
@@ -96,10 +118,26 @@ canvas#maskpad { width: 100%; border-radius: 6px; border: 1px solid #444; cursor
 <canvas id="maskpad" width="384" height="384"></canvas>
 <div class="row">
 <div><label>Brush</label><input type="range" id="brush" min="4" max="60" value="24" style="width:100%"></div>
-<div><label>&nbsp;</label><button onclick="clearMask()" style="width:100%;padding:8px;border-radius:6px;border:1px solid #444;background:#262b33;color:#fff;cursor:pointer">Clear mask</button></div>
+<div><label>&nbsp;</label><button onclick="clearMask()" style="width:100%;padding:8px;border-radius:6px;border:1px solid var(--border2);background:var(--panel2);color:#fff;cursor:pointer">Clear mask</button></div>
+</div>
+<div class="row">
+<div><label>Mode</label><select id="paintmode" onchange="togglePaintColor()">
+<option value="add">Add / replace (prompt)</option>
+<option value="remove">Remove (prompt: empty background)</option>
+<option value="color">Change color (no AI)</option>
+</select></div>
+<div id="paintcolorwrap" style="display:none"><label>Target color</label><input type="color" id="paintcolor" value="#0066ff" style="width:100%;height:38px"></div>
 </div>
 <label>Prompt (what should be there instead)</label>
 <textarea id="prompt3" placeholder="empty street, no people, clean background"></textarea>
+<label>Negative prompt</label>
+<textarea id="negprompt3" placeholder="blurry, low quality, distorted"></textarea>
+<div class="row">
+<div><label>Resolution</label><select id="size3" onchange="toggleCustom('size3','sizecustom3')">
+<option>256x256</option><option>512x512</option><option selected>512x512</option><option>768x768</option><option value="custom">custom…</option></select>
+<input id="sizecustom3" type="text" placeholder="WxH" style="display:none"></div>
+<div><label>Guidance</label><input type="number" id="guidance3" value="1.0" min="1" max="3" step="0.1" style="width:100%"></div>
+</div>
 <label>Inpaint strength: <span id="strval3">0.85</span></label>
 <input type="range" id="strength3" min="0.1" max="1" step="0.05" value="0.85" style="width:100%" oninput="document.getElementById('strval3').textContent=this.value">
 <button class="go" id="btnPaint" onclick="generatePaint()">Inpaint masked area</button>
@@ -128,6 +166,7 @@ canvas#maskpad { width: 100%; border-radius: 6px; border: 1px solid #444; cursor
 </div>
 <button class="go" id="btnTr" onclick="generateTr()">Transcribe</button>
 <div id="txtout">transcript appears here…</div>
+<a href="#" id="trsave" style="display:none;color:#58a6ff;font-size:12px" onclick="saveTranscript();return false">Save transcript</a>
 </div>
 
 <div id="formCap" style="display:none">
@@ -144,15 +183,17 @@ canvas#maskpad { width: 100%; border-radius: 6px; border: 1px solid #444; cursor
 <label>FFmpeg Tools — convert, compress, extract, trim</label>
 <div class="row">
 <div><label>Input file</label><input type="file" id="toolfile" accept="*/*"></div>
-<div><label>Operation</label><select id="toolop">
+<div><label>Operation</label><select id="toolop" onchange="refreshToolPresets()">
 <option value="convert-video">Convert Video</option>
 <option value="convert-audio">Convert Audio</option>
+<option value="convert-image">Convert Image</option>
 <option value="extract-audio">Extract Audio</option>
 <option value="trim">Trim</option>
 <option value="compress">Compress</option>
 <option value="info">Media Info</option>
 </select></div>
 </div>
+<div id="toolPresetWrap" class="row" style="margin-top:8px"><div><label>Preset</label><select id="toolpreset"></select></div></div>
 <div id="toolOpts"></div>
 <button class="go" id="btnTool" onclick="runTool()">Run</button>
 <div id="toolout">result appears here…</div>
@@ -179,9 +220,16 @@ canvas#maskpad { width: 100%; border-radius: 6px; border: 1px solid #444; cursor
 
 <div id="formSettings" style="display:none">
 <label>Server</label>
-<div id="settingsBox" style="font-size:12px;background:#0f1114;border:1px solid #333;border-radius:6px;padding:10px;white-space:pre-wrap">loading…</div>
+<div id="settingsBox" style="font-size:12px;background:var(--input);border:1px solid var(--border);border-radius:6px;padding:10px;white-space:pre-wrap">loading…</div>
 </div>
 
+<div style="display:flex;justify-content:space-between;align-items:center;margin-top:10px">
+<span style="font-size:11px;color:#7d8590;font-weight:bold">CONSOLE</span>
+<span>
+<a href="#" onclick="copyLog();return false" style="color:#58a6ff;font-size:11px;margin-right:12px">copy</a>
+<a href="#" onclick="clearLog();return false" style="color:#58a6ff;font-size:11px">clear</a>
+</span>
+</div>
 <div id="log"></div>
 </div>
 <div>
@@ -190,9 +238,28 @@ canvas#maskpad { width: 100%; border-radius: 6px; border: 1px solid #444; cursor
 </main>
 <script>
 let MODELS = [];
+function toggleTheme(){
+  const light = document.documentElement.classList.toggle('light');
+  try { localStorage.setItem('prism-theme', light ? 'light' : 'dark'); } catch(e){}
+  const b = document.getElementById('themeBtn');
+  if (b) b.textContent = light ? 'Dark' : 'Light';
+}
+(function(){
+  try {
+    if (localStorage.getItem('prism-theme') === 'light') {
+      document.documentElement.classList.add('light');
+      const b = document.getElementById('themeBtn');
+      if (b) b.textContent = 'Dark';
+    }
+  } catch(e){}
+})();
 function log(m){ const el=document.getElementById('log'); el.textContent = new Date().toLocaleTimeString()+' '+m+'\n'+el.textContent; }
+function copyLog(){ const t=document.getElementById('log').textContent||''; navigator.clipboard.writeText(t); }
+function clearLog(){ document.getElementById('log').textContent=''; }
+async function cancelModel(id){ try { await fetch('/v1/models/cancel',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({id})}); log('stop requested: '+id); setTimeout(loadCatalog, 800); } catch(e){ log('cancel error: '+e); } }
+function saveTranscript(){ const t=document.getElementById('txtout').textContent||''; const blob=new Blob([t],{type:'text/plain'}); const a=document.createElement('a'); a.href=URL.createObjectURL(blob); a.download='transcript_'+Date.now()+'.txt'; a.click(); }
 const TABS = ['txt','img','paint','up','tr','cap','tools','models','settings'];
-function showTab(t){ if(t==='models'){ loadCatalog(); loadCustom(); } if(t==='settings') loadSettings();
+function showTab(t){ if(t==='models'){ loadCatalog(); loadCustom(); } if(t==='settings') loadSettings(); if(t==='tools') refreshToolPresets();
   for (const x of TABS) {
     document.getElementById('tab'+x[0].toUpperCase()+x.slice(1)).classList.toggle('active', x===t);
     document.getElementById('form'+x[0].toUpperCase()+x.slice(1)).style.display = x===t?'block':'none';
@@ -209,7 +276,7 @@ async function refresh(){
     const h = await (await fetch('/health')).json();
     const m = await (await fetch('/v1/models')).json();
     MODELS = m.data || [];
-    // Android vracia aj audio modely; dropdown je len pre image modely.
+    // Android also returns audio models; the dropdown is for image models only.
     const imageModels = MODELS.filter(x => !x.kind || x.kind === 'image');
     const sel = document.getElementById('model');
     const prev = sel.value;
@@ -219,11 +286,23 @@ async function refresh(){
       o.value = x.id; o.textContent = x.available === false ? x.id+' (unavailable)' : x.id;
       sel.appendChild(o);
     }
-    if (prev) sel.value = prev;
+    // Populate transcription model dropdown from audio models
+    const audioModels = MODELS.filter(x => x.kind === 'audio');
+    const trsel = document.getElementById('trmodel');
+    if (audioModels.length) {
+      const prev = trsel.value;
+      trsel.innerHTML = '';
+      for (const x of audioModels) {
+        const o = document.createElement('option');
+        o.value = x.id; o.textContent = x.id + (x.available === false ? ' (unavailable)' : '');
+        trsel.appendChild(o);
+      }
+      if (prev) trsel.value = prev;
+    }
     try { const saved = localStorage.getItem('u_model'); if (saved && !prev) sel.value = saved; } catch(e){}
     const miss = m.missing_models || [];
     const w = document.getElementById('warn');
-    if (miss.length) { w.style.display='block'; w.textContent = 'Missing model files: '+miss.join(', ')+'.'; }
+    if (miss.length && !localStorage.getItem('hideMissing')) { w.style.display='block'; w.innerHTML = 'Missing model files: '+miss.join(', ')+' <button onclick="localStorage.setItem(\'hideMissing\',\'1\');document.getElementById(\'warn\').style.display=\'none\'" style="background:none;border:none;color:#79c0ff;cursor:pointer;font-size:11px">hide</button>'; }
     else { w.style.display='none'; }
     st.innerHTML = 'server <b class="ok">OK</b> · img models: '+imageModels.length+' · loaded: '+(h.current_model||h.model||'none (lazy)')
       +' · audio: '+(m.default_audio_model||'?')+(h.audio_loaded?' (loaded)':'')
@@ -255,6 +334,43 @@ async function pollProgress(id, btn, label){
     }
   }
 }
+function toggleCustom(selId, inputId){
+  const v = document.getElementById(selId).value;
+  document.getElementById(inputId).style.display = v === 'custom' ? 'block' : 'none';
+}
+function resolveSize(selId, inputId){
+  const v = document.getElementById(selId).value;
+  if (v === 'custom') return (document.getElementById(inputId).value || '').trim() || '512x512';
+  return v;
+}
+function togglePaintColor(){
+  const m = document.getElementById('paintmode').value;
+  document.getElementById('paintcolorwrap').style.display = m === 'color' ? 'block' : 'none';
+}
+let FFPRESETS = null;
+async function loadFfPresets(){
+  if (FFPRESETS) return FFPRESETS;
+  try { FFPRESETS = await (await fetch('/v1/ffmpeg/presets')).json(); } catch(e){ FFPRESETS = {}; }
+  return FFPRESETS;
+}
+async function refreshToolPresets(){
+  const op = document.getElementById('toolop').value;
+  const wrap = document.getElementById('toolPresetWrap');
+  const sel = document.getElementById('toolpreset');
+  const p = await loadFfPresets();
+  let map = null;
+  if (op === 'convert-video' || op === 'compress') map = p.video;
+  else if (op === 'convert-audio') map = p.audio;
+  else if (op === 'convert-image') map = p.image;
+  if (!map) { wrap.style.display = 'none'; return; }
+  wrap.style.display = 'flex';
+  sel.innerHTML = '';
+  for (const [k, v] of Object.entries(map)) {
+    const o = document.createElement('option');
+    o.value = k; o.textContent = k + ' — ' + (v.desc || '');
+    sel.appendChild(o);
+  }
+}
 function fileToB64(file){
   return new Promise((res, rej) => {
     const r = new FileReader();
@@ -267,7 +383,9 @@ async function generateTxt(){
   const btn = document.getElementById('btnTxt');
   const body = { model: document.getElementById('model').value,
     prompt: document.getElementById('prompt').value.trim(),
-    size: document.getElementById('size').value,
+    negative_prompt: document.getElementById('negprompt').value.trim(),
+    guidance: +(document.getElementById('guidance').value || 1),
+    size: resolveSize('size', 'sizecustom'),
     quality: document.getElementById('quality').value, n: 1, request_id: rid() };
   if(!body.prompt){ alert('Enter a prompt'); return; }
   btn.disabled = true; btn.textContent = 'Generating…';
@@ -291,8 +409,10 @@ async function generateImg(){
   if(!prompt){ alert('Enter a prompt'); return; }
   const fd = new FormData();
   fd.append('prompt', prompt); fd.append('image', f);
+  fd.append('negative_prompt', document.getElementById('negprompt2').value.trim());
+  fd.append('guidance', document.getElementById('guidance2').value || '1.0');
   fd.append('model', document.getElementById('model').value);
-  fd.append('size', document.getElementById('size2').value);
+  fd.append('size', resolveSize('size2', 'sizecustom2'));
   fd.append('quality', document.getElementById('quality2').value);
   fd.append('strength', document.getElementById('strength').value);
   const id = rid(); fd.append('request_id', id);
@@ -348,9 +468,17 @@ async function generatePaint(){
   const btn = document.getElementById('btnPaint');
   const prompt = document.getElementById('prompt3').value.trim();
   if(!paintImg){ alert('Pick an image first'); return; }
-  if(!prompt){ alert('Enter a prompt'); return; }
+  const paintMode = document.getElementById('paintmode').value;
+  if(!prompt && paintMode !== 'color'){ alert('Enter a prompt'); return; }
   const mask = pad.toDataURL('image/png').split(',')[1];
+  const mode = document.getElementById('paintmode').value;
   const body = { image: paintImg, mask, prompt,
+    negative_prompt: document.getElementById('negprompt3').value.trim(),
+    guidance: +(document.getElementById('guidance3').value || 1),
+    mode: mode,
+    color: document.getElementById('paintcolor').value,
+    width: parseInt((resolveSize('size3','sizecustom3')||'512x512').split('x')[0]) || 512,
+    height: parseInt((resolveSize('size3','sizecustom3')||'512x512').split('x')[1]) || 512,
     model: document.getElementById('model').value,
     strength: +document.getElementById('strength3').value, request_id: rid() };
   btn.disabled = true; btn.textContent = 'Inpainting…';
@@ -402,6 +530,7 @@ async function generateTr(){
     if(!r.ok){ log('ERROR '+r.status+': '+JSON.stringify(j).slice(0,500)); alert('Error '+r.status); return; }
     const secs = ((Date.now()-t0)/1000).toFixed(1);
     document.getElementById('txtout').textContent = '['+(j.language||'?')+' · '+(j.engine||'?')+' · '+secs+'s]\n'+(j.text||'(empty)');
+    document.getElementById('trsave').style.display='inline';
     log('transcribed in '+secs+'s engine='+(j.engine||'?'));
   } catch(e){ log('ERROR: '+e); } finally { btn.disabled=false; btn.textContent='Transcribe'; refresh(); }
 }
@@ -430,8 +559,10 @@ async function runTool(){
   const op = document.getElementById('toolop').value;
   const fd = new FormData();
   fd.append('file', f);
-  if(op==='convert-video'){ fd.append('preset','mp4-h264'); }
-  if(op==='convert-audio'){ fd.append('preset','mp3-128'); }
+  if(op==='convert-video' || op==='convert-audio' || op==='convert-image'){
+    const sel = document.getElementById('toolpreset');
+    fd.append('preset', sel.value || (op==='convert-audio' ? 'mp3-128' : 'mp4-h264'));
+  }
   if(op==='trim'){ fd.append('start','0'); fd.append('end','10'); }
   if(op==='compress'){ fd.append('target_size_mb','10'); }
   btn.disabled = true; btn.textContent = 'Processing...';
@@ -456,60 +587,91 @@ async function runTool(){
 
 // ---------- models (install/uninstall) ----------
 let CATALOG = [];
+let KINDS = [];
 async function loadCatalog(){
   try {
     const r = await fetch('/v1/models/catalog');
     const j = await r.json();
     CATALOG = j.models || [];
+    KINDS = j.kinds || [];
     renderCatalog();
     loadCustom();
   } catch(e){ log('catalog error: '+e); }
 }
 function fmtGb(x){ return (x||0).toFixed(2)+' GB'; }
+
+function catalogRow(m){
+  const row = document.createElement('div');
+  row.style.cssText = 'padding:8px 0;border-bottom:1px solid var(--border)';
+
+  const line = document.createElement('div');
+  line.style.cssText = 'display:flex;gap:8px;align-items:center';
+
+  const info = document.createElement('div');
+  info.style.cssText = 'flex:1';
+  const state = m.installed ? 'INSTALLED'
+    : (m.install_state==='downloading' ? 'DOWNLOADING '+(m.install_progress||0)+'%'
+    : (m.install_state==='error' || m.install_state==='failed' ? 'ERROR' : 'not installed'));
+  const color = m.installed ? '#7ee787'
+    : ((m.install_state==='error'||m.install_state==='failed') ? '#ff7b72' : '#d29922');
+  const engine = m.engine ? ' · '+m.engine : '';
+  info.innerHTML = '<b style="font-size:13px">'+(m.label||m.id)+'</b>'
+    + '<div style="font-size:11px;color:#7d8590">'+m.id+engine+' · '
+    + (m.size_mb ? m.size_mb+' MB' : fmtGb(m.size_gb))
+    + ' · <span style="color:'+color+'">'+state+'</span></div>'
+    + (m.install_error ? '<div style="font-size:11px;color:#ff7b72">'+m.install_error+'</div>' : '');
+
+  const btn = document.createElement('button');
+  btn.className = 'go';
+  btn.style.cssText = 'margin:0;width:130px;padding:6px;font-size:12px;'
+    + (m.installed ? 'background:#da3633' : 'background:#238636');
+  const noSource = m.has_source === false;
+  const downloading = m.install_state === 'downloading';
+  btn.textContent = downloading ? 'Stop'
+    : (m.installed ? 'Uninstall' : (noSource ? 'No source' : 'Install'));
+  btn.disabled = !downloading && (!m.installed && noSource);
+  btn.onclick = () => downloading ? cancelModel(m.id)
+    : (m.installed ? uninstallModel(m.id) : installModel(m.id));
+
+  line.appendChild(info);
+  line.appendChild(btn);
+  row.appendChild(line);
+
+  if (m.install_state === 'downloading') {
+    const bar = document.createElement('div');
+    bar.style.cssText = 'height:4px;background:var(--panel2);border-radius:2px;margin-top:6px';
+    const fill = document.createElement('div');
+    fill.style.cssText = 'height:4px;width:'+(m.install_progress||2)+'%;background:#2f81f7;border-radius:2px';
+    bar.appendChild(fill);
+    row.appendChild(bar);
+  }
+  return row;
+}
+
 function renderCatalog(){
   const box = document.getElementById('modelList');
   box.innerHTML = '';
+  const labels = {};
+  for (const k of KINDS) labels[k.id] = k.label;
+  const groups = {};
   for (const m of CATALOG) {
-    const row = document.createElement('div');
-    row.style.cssText = 'padding:8px 0;border-bottom:1px solid #262b33';
+    const k = m.kind || 'other';
+    (groups[k] = groups[k] || []).push(m);
+  }
+  const order = KINDS.map(k => k.id).filter(k => groups[k]);
+  for (const k of Object.keys(groups)) if (!order.includes(k)) order.push(k);
 
-    const line = document.createElement('div');
-    line.style.cssText = 'display:flex;gap:8px;align-items:center';
-
-    const info = document.createElement('div');
-    info.style.cssText = 'flex:1';
-    const state = m.installed ? 'INSTALLED'
-      : (m.install_state==='downloading' ? 'DOWNLOADING '+m.install_progress+'%'
-      : (m.install_state==='error' ? 'ERROR' : 'not installed'));
-    const color = m.installed ? '#7ee787' : (m.install_state==='error' ? '#ff7b72' : '#d29922');
-    info.innerHTML = '<b style="font-size:13px">'+m.id+'</b>'
-      + '<div style="font-size:11px;color:#7d8590">'+m.kind+' · '+fmtGb(m.size_gb)
-      + ' · <span style="color:'+color+'">'+state+'</span></div>'
-      + '<div style="font-size:11px;color:#7d8590;word-break:break-all">'+(m.label||'')+'</div>';
-
-    const btn = document.createElement('button');
-    btn.className = 'go';
-    btn.style.cssText = 'margin:0;width:130px;padding:6px;font-size:12px;'
-      + (m.installed ? 'background:#da3633' : 'background:#238636');
-    const noSource = m.has_source === false;
-    btn.textContent = m.installed ? 'Uninstall'
-      : (noSource ? 'No source' : (m.install_state==='downloading' ? 'Installing…' : 'Install'));
-    btn.disabled = m.install_state === 'downloading' || (!m.installed && noSource);
-    btn.onclick = () => m.installed ? uninstallModel(m.id) : installModel(m.id);
-
-    line.appendChild(info);
-    line.appendChild(btn);
-    row.appendChild(line);
-
-    if (m.install_state === 'downloading') {
-      const bar = document.createElement('div');
-      bar.style.cssText = 'height:4px;background:#262b33;border-radius:2px;margin-top:6px';
-      const fill = document.createElement('div');
-      fill.style.cssText = 'height:4px;width:'+(m.install_progress||2)+'%;background:#2f81f7;border-radius:2px';
-      bar.appendChild(fill);
-      row.appendChild(bar);
-    }
-    box.appendChild(row);
+  for (const kind of order) {
+    const items = groups[kind];
+    const det = document.createElement('details');
+    det.open = true;
+    det.style.cssText = 'margin:6px 0';
+    const sum = document.createElement('summary');
+    sum.style.cssText = 'cursor:pointer;font-size:12px;font-weight:600;color:var(--text);padding:8px 4px';
+    sum.textContent = (labels[kind] || kind) + '  (' + items.length + ')';
+    det.appendChild(sum);
+    for (const m of items) det.appendChild(catalogRow(m));
+    box.appendChild(det);
   }
 }
 async function findModels(){
@@ -525,7 +687,7 @@ async function findModels(){
     if(!(j.models||[]).length){ box.textContent = 'no results'; return; }
     for (const m of j.models) {
       const row = document.createElement('div');
-      row.style.cssText = 'display:flex;gap:8px;align-items:center;padding:6px 0;border-bottom:1px solid #262b33';
+      row.style.cssText = 'display:flex;gap:8px;align-items:center;padding:6px 0;border-bottom:1px solid var(--border)';
       const info = document.createElement('div');
       info.style.cssText = 'flex:1;font-size:12px';
       info.innerHTML = '<b>'+m.id+'</b>'
@@ -575,7 +737,7 @@ async function loadCustom(){
     if(!(j.models||[]).length){ box.innerHTML = '<div style="font-size:12px;color:#7d8590;padding:6px">none</div>'; return; }
     for (const m of j.models) {
       const row = document.createElement('div');
-      row.style.cssText = 'display:flex;gap:8px;align-items:center;padding:6px 0;border-bottom:1px solid #262b33';
+      row.style.cssText = 'display:flex;gap:8px;align-items:center;padding:6px 0;border-bottom:1px solid var(--border)';
       const info = document.createElement('div');
       info.style.cssText = 'flex:1;font-size:12px';
       const state = m.state === 'downloading' ? 'DOWNLOADING '+m.progress+'%' : (m.state === 'error' ? 'ERROR' : '');

@@ -1,14 +1,14 @@
 <#
-Switch-Service-ToUnified.ps1 - prepne Windows službu OdysseusDiffusion
-zo starého diffusion_server.py na unified_server.py.
+Switch-Service-ToUnified.ps1 - switches the OdysseusDiffusion Windows service
+from the old diffusion_server.py to unified_server.py.
 
-POZOR: mení bežiacu systémovú službu. Spusti len keď chceš unified
-(WebUI + audio + modely) namiesto starého image-only servera.
+WARNING: changes a running system service. Run it only when you want the
+unified server (WebUI + audio + models) instead of the old image-only server.
 Revert: .\Switch-Service-ToUnified.ps1 -Revert
 
-Predpoklady:
-- služba OdysseusDiffusion existuje (nssm.exe v tomto adresári)
-- .venv existuje
+Prerequisites:
+- the OdysseusDiffusion service exists (nssm.exe in this directory)
+- .venv exists
 #>
 param(
   [switch]$Revert,

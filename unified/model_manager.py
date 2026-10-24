@@ -1,7 +1,7 @@
-"""Shared VRAM/RAM gate — vždy max 1 ťažký model rezidentný.
+"""Shared VRAM/RAM gate — at most one heavy model resident.
 
-SD aj Whisper súťažia o rovnakú VRAM (6 GB karta, 3-4 GB limit na mobile).
-Prepnutie druhu/id = unload + load. Cold load hlási 503 loading tvar.
+SD and Whisper compete for the same VRAM (6 GB card, 3-4 GB limit on mobile).
+Switching kind/id = unload + load. Cold load returns the 503 loading shape.
 """
 import threading
 import time
@@ -31,7 +31,7 @@ class ModelManager:
         self.load_count = 0
         self.last_used = 0.0
         self._in_flight = 0
-        # Volaný pri unload-e (unified_server zavesí uvoľnenie engine-ov).
+        # Called on unload (unified_server hooks engine release).
         self.on_unload = None
 
     def set_loading(self, kind, model_id, active):
@@ -40,6 +40,8 @@ class ModelManager:
             self._loading_model = model_id if active else ""
 
     def ensure(self, kind, model_id):
+        # The release callback runs while the lock is held, so a concurrent
+        # `ensure` cannot install a new model before the old engine is released.
         with self._lock:
             if self._loading:
                 raise ModelLoadingError(
@@ -50,9 +52,14 @@ class ModelManager:
             if self._loaded_kind == kind and self._loaded_id == model_id:
                 self.last_used = time.time()
                 return model_id
-            # prepnutie = unload predchádzajúceho
+            # switch = unload the previous one (and release its engine)
             if self._loaded_kind is not None:
                 self._do_unload_locked("switch")
+                if callable(self.on_unload):
+                    try:
+                        self.on_unload("switch")
+                    except Exception:
+                        pass
             self._loaded_kind = kind
             self._loaded_id = model_id
             self.load_count += 1
@@ -79,22 +86,29 @@ class ModelManager:
     def unload(self, reason="idle"):
         with self._lock:
             had = self._do_unload_locked(reason)
-        if had and callable(self.on_unload):
-            try:
-                self.on_unload(reason)
-            except Exception:
-                pass
-        return had
+            if had and callable(self.on_unload):
+                try:
+                    self.on_unload(reason)
+                except Exception:
+                    pass
+            return had
+
+    def _refresh_busy_locked(self):
+        """busy = a request runs, queue = requests waiting behind the first one."""
+        self._busy = self._in_flight > 0
+        self._queue = max(0, self._in_flight - 1)
 
     def begin(self):
-        """Označí prebiehajúci request — idle unloader nesmie unloadnúť počas neho."""
+        """Mark an in-flight request — the idle unloader must not unload during it."""
         with self._lock:
             self._in_flight += 1
+            self._refresh_busy_locked()
             self.last_used = time.time()
 
     def end(self):
         with self._lock:
             self._in_flight = max(0, self._in_flight - 1)
+            self._refresh_busy_locked()
             self.last_used = time.time()
 
     def in_flight(self) -> int:

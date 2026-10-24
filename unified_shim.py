@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""Legacy :4444 shim — preposiela všetko na unified :8101.
+"""Legacy :4444 shim — forwards everything to unified :8101.
 
-Len stdlib (beží aj na system python bez závislostí):
+Stdlib only (works on system Python without dependencies):
   python unified_shim.py --target http://127.0.0.1:8101 --port 4444
-Pre Odysseus klientov, ktorí majú natvrdo :4444 z čias WhisperApi.
+For Odysseus clients that hardcode :4444 from the WhisperApi era.
 """
 import argparse
 import urllib.request
