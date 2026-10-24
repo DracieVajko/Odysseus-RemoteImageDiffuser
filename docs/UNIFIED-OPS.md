@@ -1,18 +1,18 @@
-# UNIFIED-OPS — prevádzka unified servera (bez pushu, lokálne)
+# UNIFIED-OPS — operating the unified server (no push, local)
 
-## Štart / stop (Windows, .venv)
+## Start / stop (Windows, .venv)
 
 ```powershell
 .\Start-Unified.ps1            # :8101 lazy, whisper fallback -> :4444
 .\Start-Unified.ps1 -Remote   # + bind 0.0.0.0 (Tailscale/LAN)
-.\Start-Unified.ps1 -Shim     # + legacy :4444 -> :8101 pre starých klientov
+.\Start-Unified.ps1 -Shim     # + legacy :4444 -> :8101 for old clients
 .\Stop-Unified.ps1
 ```
 
-Starý `Start-Diffusion.ps1` / `Stop-Diffusion.ps1` ostáva nedotknutý (fix
-branch). Nové PID súbory: `run/unified.pid`, `run/unified-shim.pid`.
+The old `Start-Diffusion.ps1` / `Stop-Diffusion.ps1` remains untouched (fix
+branch). New PID files: `run/unified.pid`, `run/unified-shim.pid`.
 Env: `UNIFIED_WHISPER_URL` (default `http://127.0.0.1:4444`),
-`UNIFIED_NO_ENGINE=1` = bez diffusion registrácie (vždy placeholder).
+`UNIFIED_NO_ENGINE=1` = without diffusion registration (always placeholder).
 
 ## CLI
 
@@ -23,26 +23,26 @@ Env: `UNIFIED_WHISPER_URL` (default `http://127.0.0.1:4444`),
 .venv\Scripts\python.exe generate_image.py transcribe --input audio.mp3 --model small --language sk
 ```
 
-## Modely
+## Models
 
-- Obrazy: `models.json` (4× SD, ~19 GB) + `download_models.py --preset odysseus-default|sd15|sdxl|sdxl-turbo`.
+- Images: `models.json` (4× SD, ~19 GB) + `download_models.py --preset odysseus-default|sd15|sdxl|sdxl-turbo`.
 - Upscale: `models/RealESRGAN_x4v3/RealESRGAN_x4plus.pth` (67 MB, BSD-3)
-  cez `download_models.py --preset upscale`. Bez váhy = Pillow fallback.
-- Audio: WhisperApi služba na :4444 (vlastný faster-whisper env) alebo
-  `pip install faster-whisper` do `.venv` pre lokálny engine.
+  via `download_models.py --preset upscale`. Without weights = Pillow fallback.
+- Audio: WhisperApi service on :4444 (its own faster-whisper env) or
+  `pip install faster-whisper` into `.venv` for the local engine.
 - VLM: `download_models.py --preset vlm` (SmolVLM-500M, ~1 GB).
 
-### Install / uninstall z WebUI a CLI
+### Install / uninstall from WebUI and CLI
 
-WebUI → tab **Models**: zoznam modelov, stav installed/not installed,
-tlačidlá **Install** / **Uninstall**, progress a „Install all missing".
+WebUI → **Models** tab: model list, installed/not installed status,
+**Install** / **Uninstall** buttons, progress and "Install all missing".
 
 CLI:
 ```powershell
-.venv\Scripts\python.exe generate_image.py models            # katalóg + stav
+.venv\Scripts\python.exe generate_image.py models            # catalog + status
 .venv\Scripts\python.exe generate_image.py install SDXL_Turbo
 .venv\Scripts\python.exe generate_image.py uninstall SDXL_Turbo
-.venv\Scripts\python.exe generate_image.py status            # server + modely
+.venv\Scripts\python.exe generate_image.py status            # server + models
 ```
 
 API:
@@ -51,38 +51,38 @@ API:
 - `POST /v1/models/uninstall  {"id": "..."}`
 - `GET  /v1/settings`
 
-Uninstall má path guard: nikdy nezmaže nič mimo `models/`.
+Uninstall has a path guard: it never deletes anything outside `models/`.
 
-### Model finder + custom modely (PC)
+### Model finder + custom models (PC)
 
 ```powershell
 python generate_image.py search dreamshaper --limit 10   # HuggingFace search
-python generate_image.py add Lykon/DreamShaper            # stiahne do models/DreamShaper
-python generate_image.py custom                          # zoznam custom adresárov
-python generate_image.py delete DreamShaper              # zmaže custom model
+python generate_image.py add Lykon/DreamShaper            # downloads into models/DreamShaper
+python generate_image.py custom                          # list of custom directories
+python generate_image.py delete DreamShaper              # deletes a custom model
 ```
 
 API: `GET /v1/models/find?q=`, `POST /v1/models/add {repo_id|url,name}`,
 `GET /v1/models/custom`, `POST /v1/models/delete {name}`.
 
-Pravidlá:
-- `add` s `repo_id` (diffusers snapshot) je len na PC; Android podporuje
-  single-file URL (GGUF/ONNX/safetensors) cez DownloadManager.
-- `delete` odmietne katalógové modely (na tie je `uninstall`) a cesty
-  mimo `models/`.
+Rules:
+- `add` with `repo_id` (diffusers snapshot) is PC-only; Android supports
+  single-file URL (GGUF/ONNX/safetensors) via DownloadManager.
+- `delete` refuses catalog models (those use `uninstall`) and paths
+  outside `models/`.
 
-## Lazy loading a idle unload
+## Lazy loading and idle unload
 
-- Štart: **žiadny model v RAM/VRAM** (`/health` → `current_model: ""`,
+- Start: **no model in RAM/VRAM** (`/health` → `current_model: ""`,
   `idle_seconds: null`).
-- Prvý request model načíta (SD cold load ~1–3 min), ďalšie ho používajú.
-- Prepnutie modelu/typu = unload predchádzajúceho (single-resident).
-- Po `UNIFIED_IDLE_UNLOAD_SECONDS` (default 900 s) bez requestov sa model
-  uvoľní; počas prebiehajúceho requestu sa **nikdy** neunloaduje
-  (in-flight guard — inak by cold load > limit zabil vlastnú generáciu).
-- Diagnostika: `/health` → `idle_seconds`, `idle_unload_seconds`, `in_flight`.
+- The first request loads the model (SD cold load ~1–3 min), later ones use it.
+- Switching model/type = unload of the previous one (single-resident).
+- After `UNIFIED_IDLE_UNLOAD_SECONDS` (default 900 s) without requests the model
+  is released; during an in-flight request it is **never** unloaded
+  (in-flight guard — otherwise a cold load > limit would kill its own generation).
+- Diagnostics: `/health` → `idle_seconds`, `idle_unload_seconds`, `in_flight`.
 
-## FFmpeg tools (WebUI tab Tools + CLI)
+## FFmpeg tools (WebUI Tools tab + CLI)
 
 ```powershell
 python generate_image.py presets
@@ -97,52 +97,52 @@ python generate_image.py info --input in.mp4
 API: `GET /v1/ffmpeg/presets`, `POST /v1/ffmpeg/{convert-video|convert-audio|
 extract-audio|trim|compress|info}` (multipart).
 
-## Prepnutie Windows služby na unified
+## Switching the Windows service to unified
 
-`OdysseusDiffusion` služba dnes beží starý `diffusion_server.py`. Prepnutie
-(mení bežiacu službu, spusti vedome):
+The `OdysseusDiffusion` service currently runs the old `diffusion_server.py`. Switching
+(changes the running service, run it deliberately):
 
 ```powershell
-.\Switch-Service-ToUnified.ps1 -WhatIf   # ukáže, čo by zmenil
-.\Switch-Service-ToUnified.ps1           # prepne na unified_server
-.\Switch-Service-ToUnified.ps1 -Revert   # vráti starý diffusion_server
+.\Switch-Service-ToUnified.ps1 -WhatIf   # shows what it would change
+.\Switch-Service-ToUnified.ps1           # switches to unified_server
+.\Switch-Service-ToUnified.ps1 -Revert   # reverts to the old diffusion_server
 ```
 
 ## Odysseus wiring
 
 - Image base URL: `http://<host>:8101`, audio base URL: `http://<host>:8101`
-  (cesty `/v1/audio/...` identické s bývalou :4444).
-- Zmluva: `docs/UNIFIED-CONTRACT.md` (frozen). Starý kontrakt platí ďalej:
+  (paths `/v1/audio/...` identical to the former :4444).
+- Contract: `docs/UNIFIED-CONTRACT.md` (frozen). The old contract still applies:
   `docs/ODYSSEUS-CONTRACT.md`.
 
-## Portable balíček (Win/Mac/Linux)
+## Portable package (Win/Mac/Linux)
 
 V1 = repo + `.venv` + `models/` + `Start-Unified.ps1` (Win) /
-`uvicorn unified_server:app` (.venv python) všade. Mac: `--cpu` cesta
-automaticky (torch MPS/CPU, SD pomalé ale funkčné); Linux: rovnaký venv
-postup ako Win. Plný inštalátor (PyInstaller/Briefcase) až po stabilizácii
-V1 — venv má ~8 GB, modely ~19 GB, nič z toho necommitovať.
+`uvicorn unified_server:app` (.venv python) everywhere. Mac: `--cpu` path
+automatically (torch MPS/CPU, SD slow but functional); Linux: same venv
+procedure as Win. A full installer (PyInstaller/Briefcase) only after V1
+stabilizes — the venv is ~8 GB, models ~19 GB, none of it should be committed.
 
 ## Android
 
-Pozri `android/README.md` + `android/contract-compat.md` a `docs/ANDROID.md`.
-`./gradlew :app:assembleDebug` až na stroji s Android SDK.
+See `android/README.md` + `android/contract-compat.md` and `docs/ANDROID.md`.
+`./gradlew :app:assembleDebug` only on a machine with the Android SDK.
 
-Android appka má vlastné UI (status karta, Local/Auto/Remote, modely
-s Install/Uninstall a reálnym progress barom, activity log) a navyše
-**Open Web UI** — servíruje rovnaké `webui_unified.html` z APK assets,
-takže UI je identické s PC. WebUI sa do APK syncuje pri každom builde
-(Gradle task `syncWebUi`).
+The Android app is a **standalone offline server with its own native UI**
+(tabs: Server / Generate / Transcribe / Upscale / Caption / Tools; models
+manager; settings; console). There is **no WebUI in the APK**, no
+Local/Auto/Remote switch and no remote host — every request is served locally.
 
-Na mobile funguje reálne: `/health`, `/v1/models`, `/v1/audio/*` (whisper JNI),
-`/v1/models/catalog|install|uninstall`, `/v1/settings`, `/webui`.
-Generovanie obrázkov / upscale / caption vracajú 503 (mobilný engine nie je
-hotový) — vtedy použi Remote mode na PC.
+Working on-device: `/health`, `/v1/models`, `/v1/audio/*` (whisper JNI),
+`/v1/models/catalog|install|uninstall|cancel|add|delete`,
+`/v1/images/generations` (ONNX LCM QDQ), `/v1/settings`.
+Edits/inpaint/harmonize/upscale/caption/chat/ffmpeg return 503 until the
+on-device engines land (see `docs/ONDEVICE-PLAN.md`).
 
-### Test cez adb
+### Test via adb
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File android/adb_test.ps1
+powershell -ExecutionPolicy Bypass -File monitor_android.ps1
 ```
-Skript: forward `8199→8101`, health, modely, transcribe smoke, caption 503 check,
-logcat.
+Script: forward `8199→8101`, health, models, transcription smoke, resource
+snapshot, logcat dump.

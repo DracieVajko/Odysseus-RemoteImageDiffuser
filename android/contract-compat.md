@@ -1,15 +1,15 @@
 # Android contract-compat checklist (same-contract vs ODYSSEUS-CONTRACT)
 
-Base: `http://<phone>:8101`. Overuje sa proti bežiacemu telefónu —
-bez emulatora, ručne cez `curl`. Každý riadok: príkaz → očakávaný tvar.
+Base: `http://<phone>:8101`. Verified against a running phone —
+no emulator, manually via `curl`. Each line: command → expected shape.
 
-> Požiadavka: `request_id` sa echoje v každej odpovedi; progress sa polluje
-> počas čakania. Cold load / chýbajúce váhy → `503`, nikdy hang.
+> Requirement: `request_id` is echoed in every response; progress is polled
+> while waiting. Cold load / missing weights → `503`, never a hang.
 
-## Predpoklady
+## Prerequisites
 
-- Appka nainštalovaná, server spustený (Local alebo Auto→Local).
-- `PHONE` = IP telefónu v LAN.
+- App installed, server running (Local or Auto→Local).
+- `PHONE` = the phone's IP in the LAN.
 
 ```bash
 PHONE=192.168.1.60
@@ -21,7 +21,7 @@ PHONE=192.168.1.60
 curl -s http://$PHONE:8101/health
 ```
 
-Očakávané:
+Expected:
 
 ```json
 {"status":"ok","model":"","current_model":"","device":"vulkan-ncnn",
@@ -29,8 +29,8 @@ Očakávané:
  "loading":false,"loading_model":"","busy":false,"queue":0}
 ```
 
-- [ ] `device` = `vulkan-ncnn` (nie cpu/cuda, nie nnapi)
-- [ ] `busy:true` / `queue:N` = server pracuje, neposielať znova
+- [ ] `device` = `vulkan-ncnn` (not cpu/cuda, not nnapi)
+- [ ] `busy:true` / `queue:N` = the server is working, do not send again
 
 ## 2. GET /v1/models
 
@@ -38,9 +38,9 @@ Očakávané:
 curl -s http://$PHONE:8101/v1/models
 ```
 
-- [ ] `data[].id` obsahuje `lcm-dreamshaper-int8` + `whisper-small-q5_0`
-- [ ] `available:false` pred stiahnutím váh, `missing_models` ich zoznamuje
-- [ ] `currently_loaded_model`, `loading`, `loading_model` prítomné
+- [ ] `data[].id` contains `lcm-dreamshaper-int8` + `whisper-small-q5_0`
+- [ ] `available:false` before the weights are downloaded, `missing_models` lists them
+- [ ] `currently_loaded_model`, `loading`, `loading_model` present
 
 ## 3. POST /v1/images/generations
 
@@ -52,10 +52,10 @@ curl -s http://$PHONE:8101/v1/images/generations \
 
 - [ ] `200` → `{created, data:[{b64_json}], request_id:"t1"}`
 - [ ] `n=5` → `400 n must be 1..4`
-- [ ] `size:"1x1"` → `400` (príliš malé)
-- [ ] steps cap: `quality:high` aj `steps:50` → interný clamp **4–8** (LCM režim)
-- [ ] bez stiahnutého modelu → `503 will-not-load` (nie 500, nie hang)
-- [ ] počas cold loadu → `503 {"error":"loading model","retry_after":30}`
+- [ ] `size:"1x1"` → `400` (too small)
+- [ ] steps cap: `quality:high` and `steps:50` → internal clamp **4–8** (LCM mode)
+- [ ] without a downloaded model → `503 will-not-load` (not 500, not a hang)
+- [ ] during cold load → `503 {"error":"loading model","retry_after":30}`
 
 ## 4. POST /v1/images/edits (multipart)
 
@@ -64,8 +64,8 @@ curl -s http://$PHONE:8101/v1/images/edits \
   -F image=@input.png -F prompt="snowy version" -F strength=0.6 -F request_id=t2
 ```
 
-- [ ] `200` → rovnaký tvar ako generations
-- [ ] bez `image` partu → `400`
+- [ ] `200` → same shape as generations
+- [ ] without the `image` part → `400`
 
 ## 5. POST /v1/images/inpaint (JSON b64)
 
@@ -77,8 +77,8 @@ curl -s http://$PHONE:8101/v1/images/inpaint \
 ```
 
 - [ ] `200` → `{image, elapsed, request_id}`
-- [ ] bez masky → `400`
-- [ ] canvas `8192+` px → `503 will-not-load` (DoS guard, nie hang)
+- [ ] without a mask → `400`
+- [ ] canvas `8192+` px → `503 will-not-load` (DoS guard, not a hang)
 
 ## 6. POST /v1/images/harmonize (JSON b64)
 
@@ -90,7 +90,7 @@ curl -s http://$PHONE:8101/v1/images/harmonize \
 
 - [ ] `200` → `{image, elapsed, request_id}`
 
-## 7. POST /v1/images/upscale (nové V1)
+## 7. POST /v1/images/upscale (new in V1)
 
 ```bash
 curl -s http://$PHONE:8101/v1/images/upscale \
@@ -109,10 +109,10 @@ curl -s http://$PHONE:8101/v1/audio/translations   -F audio=@rec.m4a
 ```
 
 - [ ] `200` → `{text, language, ...}`
-- [ ] prázdny súbor → `400`, nie `500`
-- [ ] nepodporovaná ext (`.xyz`) → `415`
+- [ ] empty file → `400`, not `500`
+- [ ] unsupported ext (`.xyz`) → `415`
 - [ ] >100 MB → `400`
-- [ ] Whisper minimum pre SK = **small Q5_0** (tiny/base sa nenasadzujú)
+- [ ] Whisper minimum for SK = **small Q5_0** (tiny/base are not deployed)
 
 ## 9. GET /v1/images/progress/{id}
 
@@ -121,21 +121,21 @@ curl -s http://$PHONE:8101/v1/images/progress/t1
 ```
 
 - [ ] `{id, status: running|done|error|loading|unknown, step, total, percent}`
-- [ ] neznáme id → `status:unknown` (nie 500)
-- [ ] `loading` = cold load prebieha, ešte žiadne steps
+- [ ] unknown id → `status:unknown` (not 500)
+- [ ] `loading` = cold load in progress, no steps yet
 
-## 10. Prepnutie modelu za behu (single-resident)
+## 10. Model switch at runtime (single-resident)
 
-1. `POST /v1/images/generations` → OK (image rezidentný)
-2. `POST /v1/audio/transcriptions` → prvý prechod `503 loading`, po loadi OK
-3. `GET /health` → `current_model` = audio model (image bol unloadnutý)
+1. `POST /v1/images/generations` → OK (image resident)
+2. `POST /v1/audio/transcriptions` → first pass `503 loading`, OK after the load
+3. `GET /health` → `current_model` = audio model (the image model was unloaded)
 
-- [ ] nikdy nie sú 2 ťažké modely naraz (limit ~3–4 GB)
-- [ ] concurrent generations počas loadu → `503 loading`, nie corrupt pipe
+- [ ] there are never 2 heavy models at once (limit ~3–4 GB)
+- [ ] concurrent generations during a load → `503 loading`, not a corrupt pipe
 
-## Známé stub-obmedzenia tohto scaffoldu
+## Known stub limitations of this scaffold
 
-- Bez stiahnutých váh vracia image/audio/upscale cesty `503 will-not-load`
-  a generations vracia 1×1 stub PNG (hooky `TODO(NCNN)` / `TODO(WHISPER)`).
-- ffmpeg-kit **Min (LGPL)** normalizácia (wav 16 kHz mono) je TODO po pine
-  presnej LGPL-only verzie — Full/GPL sa nesmie pridať.
+- Without downloaded weights the image/audio/upscale routes return `503 will-not-load`
+  and generations returns a 1×1 stub PNG (hooks `TODO(NCNN)` / `TODO(WHISPER)`).
+- ffmpeg-kit **Min (LGPL)** normalization (wav 16 kHz mono) is TODO after pinning
+  the exact LGPL-only version — Full/GPL must not be added.

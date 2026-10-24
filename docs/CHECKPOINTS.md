@@ -1,0 +1,333 @@
+# Prism Checkpoints
+
+Chronological record of decisions and verified states. Newest last.
+
+## 2026-10-22 — Architecture pivot
+
+**Decision:** Android = native app only (no WebUI). PC = separate WebUI with all
+features. Both expose OpenAI-compatible endpoints on LAN. Android runs everything
+locally; blocked items marked experimental with documented reasons.
+
+**Why:** user wants two independent servers (phone and PC), each usable from any
+AI client (OpenAI-compatible), without the phone depending on the PC.
+
+## 2026-10-22 — Model download engine
+
+- Replaced DownloadManager with a custom engine (HTTP Range resume, staging,
+  `.READY` JSON manifest, multi-file, auto-unzip, cancel, progress).
+- Verified: whisper-turbo 547 MB, LCM 1.6 GB, custom URL.
+- Fixed legacy `.READY` migration.
+
+## 2026-10-22 — Audio
+
+- Kept only `whisper-large-v3-turbo-q5_0` (547 MB).
+- Threads 4→8, `no_context`, no progress prints.
+- Auto-split 30s chunks; verified 2-min (5 chunks) and 45-min (91 chunks).
+- `largeHeap=true` fixes OOM on 45-min files.
+
+## 2026-10-22 — LCM ONNX engine (blocked)
+
+- Ported full pipeline to `LcmOnnxEngine.kt` (CLIP BPE tokenizer, text encoder,
+  UNet, LCM scheduler, VAE decode, Bitmap).
+- ORT Android 1.19.2/1.20.0 rejects `ConvInteger(10)` (CPU, NNAPI, XNNPACK).
+- Result: `/v1/images/generations` returns 503 `LCM engine init failed`.
+- Documented in docs/ANDROID.md; fallback to PC in Auto/Remote.
+
+## 2026-10-22 — Rename + English
+
+- "Odysseus Diffusion" → "Prism" (label, notification, header, docs).
+- `AGENTS.md`: English only; architecture rules.
+
+## 2026-10-22 — Remote proxy
+
+- Per-endpoint forward before body parsing (JSON + multipart).
+- Verified GET `/v1/ffmpeg/presets`, POST JSON and multipart edits via `adb reverse`.
+
+## 2026-10-22 — Hardware adaptation
+
+- `HardwareProfile`: threads 1-8, image size 512/384/256 by RAM.
+- `largeHeap=true`.
+
+## 2026-10-22 — UI
+
+- Collapsible model sections (default closed, animated), ripple, count chip.
+- "+ Add model by URL" dialog.
+- Settings card in native app.
+- WebChromeClient file chooser in WebView (will be removed with WebUI).
+
+## 2026-10-22 — Native screens (no WebUI)
+
+- Android: removed WebUIActivity, `/webui`, syncWebUi task, Open Web UI button.
+- Added tab bar (HorizontalScrollView + MaterialButtons, no 5-item limit):
+  **Server / Generate / Transcribe / Upscale / Caption / Tools**.
+- Server: status, mode, models, settings, console.
+- Generate: prompt/size/steps/preview.
+- Transcribe: file picker + audio-model spinner + language + output.
+- Upscale: image picker + 2x.
+- Caption: image picker + caption.
+- Tools: FFmpeg note (PC-only, experimental).
+- Verified on device: app launches (69 nodes), tab switching works
+  (Generate screen shows Prompt/256x256/4/GENERATE).
+- Added active-tab highlight (blue #1F6FEB, white text) and swipe navigation
+  (GestureDetector onFling, threshold 120 px, horizontal > vertical).
+- Verified swipe left → Generate, swipe right → Server; health=200,
+  transcription OK, Android `/webui` → 404 (removed).
+
+## 2026-10-22 — Image generation works on-device
+
+- Root cause: ORT Android does not implement `ConvInteger(10)` (QOperator INT8).
+- Fix: converted the LCM UNet to QDQ format (`convert_lcm_qdq.py`):
+  `DynamicQuantizeLinear + ConvInteger + Cast + Mul + Add` → `DequantizeLinear +
+  Conv` (98/98 nodes converted, 0 skipped).
+- Also fixed text encoder input: `input_ids` must be **int32** (was int64).
+- Deployed inline QDQ UNet (824 MB) to the phone.
+- Verified: `POST /v1/images/generations` → 200, valid 256×256 PNG,
+  4 steps ≈ 19–22 s. Two consecutive generations OK.
+- Model is released after generation (`LcmOnnxEngine.release()`).
+- Proxy fix: if the PC is unreachable, image/upscale/caption now return
+  **502** with a clear reason instead of 500 ("body already consumed").
+- Upscale/caption remain stubs (502 when Auto/Remote, 503 in Local).
+
+## 2026-10-22 — Tab highlight fix
+
+- Bug: on first launch all tabs appeared blue.
+- Cause: `selectTab(0)` returned early because `currentTab == 0` and
+  `screenServer` was already visible, so the button tint was never applied.
+- Fix: removed the early-return guard; use `backgroundTintList` (not
+  `setBackgroundColor`) and re-apply after layout via `tabBar.post`.
+- Verified by pixel sampling:
+  first launch → Server `#1F6FEB`, others `#30363D`;
+  after swipe → Generate `#1F6FEB`, others `#30363D`.
+
+## 2026-10-22 — Full endpoint test
+
+- `test_all_endpoints.py`: 25/25 checks passed on Android.
+- Image gen: 256×256 ~29 s, 512×512 ~70 s, both valid PNGs.
+- Audio: transcribe 200 (27 s), translate 200 (33 s).
+- Source-dependent endpoints (edits/inpaint/harmonize/upscale/caption/chat/
+  ffmpeg) → 502 with a clear message when the PC is unreachable.
+- `/webui` → 404 (Android has no WebUI).
+- Model management + validation (400) OK.
+- PC server on :8200: all core endpoints 200; real image/audio backends
+  unavailable in this Python env (no torch/faster-whisper), fallbacks work.
+
+## 2026-10-22 — Android-only (PC option removed)
+
+- Removed Local/Auto/Remote + remote host from the UI and code.
+- Deleted `ProxyForward.kt`; no proxy logic in `ApiServer`.
+- Everything is served on-device; unimplemented features return 503.
+- Added: scrollable/selectable/copyable console, Save image, Save transcript,
+  Stop download button, `OpenDocument` picker (`*/*` for audio).
+- Single-resident: audio releases the image engine, image releases whisper.
+- Plan for the remaining on-device features: `docs/ONDEVICE-PLAN.md`.
+
+## 2026-10-23 — PC parity with Android
+
+- WebUI console: scrollable (220 px), selectable, copy + clear.
+- Transcript: Save transcript link (`.txt` download).
+- Model downloads: real **Stop** button.
+  - `download_models.py` has `_CANCEL` + `CancelledError`.
+  - URL downloads stop in the chunk loop; HF snapshots stop between files
+    (per-file `hf_hub_download` instead of `snapshot_download`).
+  - `models_manager.cancel` returns `cancelled: true`.
+- Image generation without torch/diffusers: `unified/lcm_onnx_numpy.py`
+  (numpy + onnxruntime, same QDQ UNet). Wired as a fallback in
+  `_try_real_generation`.
+  - Verified: `POST /v1/images/generations` → 200, valid PNG
+    (256×256 and 512×512).
+- English text in ffmpeg presets and messages.
+
+## 2026-10-23 — Prompts, guidance, inpaint, FFmpeg presets
+
+- Image generation now accepts **negative prompt** + **guidance** (CFG when
+  guidance > 1) on PC (`unified/lcm_onnx_numpy.py`) and Android
+  (`LcmOnnxEngine.generate`).
+- Resolution: 256/512/768 + custom WxH; quality low/medium/high + steps.
+- Inpaint:
+  - PC: ONNX VAE encoder + latent mask blend + feathered composite.
+  - Modes: `add`, `remove`, `color` (non-AI recolor, preserves luminance).
+  - Android: `LcmOnnxEngine.inpaint` + new Inpaint tab (image/mask pickers,
+    mode, color, prompt, negative, guidance, strength).
+- img2img: PC `/v1/images/edits` uses the ONNX VAE encoder; Android
+  `/v1/images/edits` calls `LcmOnnxEngine.img2img`.
+- FFmpeg presets expanded: 10 video, 8 audio, 5 image; new
+  `POST /v1/ffmpeg/convert-image`; WebUI Tools tab loads presets dynamically.
+- Test data added under `testdata/` (images, mask, audio, video, prompts).
+- PC test suite `test_pc_features.py`: **20/20 passed** (txt2img with
+  negative/guidance, custom size, img2img, inpaint add/remove/color, all FFmpeg
+  ops, transcription).
+- Android build: `BUILD SUCCESSFUL`; device verification pending reconnect.
+
+## 2026-10-23 — Harmonize + FFmpeg preset verification
+
+- PC harmonize implemented (`cpu-harmonize`): mask color match + seam feather;
+  no-mask mode does a mild auto-level.
+- `test_ffmpeg_presets.py`: **23/23 passed** (10 video, 8 audio, 5 image).
+- `test_pc_features.py` re-run: **20/20 passed**.
+- WebUI default resolution changed to 512×512 to match the ONNX model.
+- Note: MP3 192/320 are capped by a 16 kHz mono source (max ~160 kbps).
+- Android harmonize implemented (`ImageOps.kt`, `engine=cpu-harmonize`);
+  build `BUILD SUCCESSFUL`.
+
+## 2026-10-23 — GPU/CPU, themes, language
+
+- PC ONNX: provider auto-selection (CUDA → DirectML → CPU); CPU threads set to
+  `cpu_count-1`. If `onnxruntime-gpu` is installed, CUDA + CPU split the graph.
+- Android: acceleration setting Auto/CPU/GPU (NNAPI), persisted; engine reloads
+  on change.
+- PC WebUI: dark/light toggle (CSS variables, localStorage).
+- Android: theme setting System/Light/Dark via `AppCompatDelegate`; color
+  resources in `values` + `values-night`.
+- Android: language setting English/Slovak/Czech/German via
+  `AppCompatDelegate.setApplicationLocales`; strings extracted for tabs, titles,
+  main buttons; base English, translations in `values-sk/cs/de`.
+- Verified: Android `BUILD SUCCESSFUL`; PC generate 200; WebUI serves the theme
+  toggle; PC ONNX providers log `['CPUExecutionProvider']` on the CPU-only
+  onnxruntime build.
+
+## 2026-10-23 — Android on-device test
+
+- Installed the latest APK on Vivo V2415; UI shows Theme (System), Language
+  (English), Acceleration (Auto); Inpaint tab present.
+- Passed: health/models/catalog/settings, generate 256 (valid PNG) and 384
+  (negative prompt + guidance), edits (img2img), inpaint color and add,
+  harmonize (cpu-harmonize), transcription (whisper-large-v3-turbo).
+- Expected 503: caption, upscale, FFmpeg.
+- **Bug:** inpaint `add` succeeded, then `remove` lost the connection; the app
+  process appeared to be recreated (`pidof` changed, engine re-init took ~109 s
+  once). Root cause not yet proven: likely native memory pressure (ORT +
+  XNNPACK) or the OEM process killer. Next step: capture
+  `lowmemorykiller`/`am_kill` logs and native heap before/after each job, then
+  test CPU-only acceleration and a delayed (not immediate) engine release.
+- Device disconnected again after the test.
+
+## 2026-10-23 — Audit fixes + on-device re-test
+
+Fixed from the audit:
+- **P0 Android inpaint composite** — now uses `alpha * luminance`; verified on
+  device: diff inside mask 72.8, outside 0.0 (was 118.3 outside).
+- **P0 PC img2img/inpaint schedule** — `_denoise` accepts the sliced timestep
+  list; `img2img` and `inpaint` pass it. Verified 200 + valid outputs.
+- **P0 Android non-square size** — engine is square; uses the larger side and
+  reports `size` (actual) + `requested_size`; `n` now generates distinct images.
+- **P1 PC ModelManager** — `ensure` switch calls `on_unload` after releasing the
+  lock.
+- **P1 Android ModelManager** — removed `System.gc()` from the lock; translated
+  comments.
+- **P2** — removed the leftover `assets/webui.html`; PC `quality=high` → 8 steps;
+  `n` uses distinct seeds; WebUI inline colors use CSS variables; remaining
+  Slovak comments translated (`ApiServer`, `AudioDecoder`, `WhisperLib`,
+  `ModelManager`, `ffmpeg_tools`, `registry`, `vlm`, `ytdlp`, `unified_server`).
+
+On-device re-test (Vivo V2415, PID stable 2390 across all jobs):
+| Test | Result |
+|---|---|
+| generate 256×128, n=2 | 200, `size=256x256`, `requested_size=256x128`, 2 distinct images |
+| inpaint add | 200, inside 72.8 / outside 0.0 |
+| inpaint remove | 200, engine=onnx |
+| inpaint color | 200, engine=onnx |
+| harmonize | 200, engine=cpu-harmonize |
+| transcribe | 200, whisper-large-v3-turbo |
+| generate 256 after the above | 200, PID unchanged |
+
+Repo cleanup: 109 scratch/test files removed (root untracked 128 → 29).
+
+## 2026-10-23 — Verification closure (concurrency, states, load)
+
+- **PC ModelManager race fixed:** `on_unload("switch")` now runs while the lock
+  is held, so a concurrent `ensure` cannot install a new model before the old
+  engine is released. `unload()` also calls the hook under the lock.
+- `test_model_manager_concurrency.py`: PASS — basic switch, release-before-new-
+  state (second ensure blocked ≥0.15 s during a 0.25 s callback), 8 threads ×
+  10 switches with no deadlock and `unload calls == load_count - 1`.
+- **Android state reporting:** Ktor `Monitoring` intercept tracks image/audio
+  requests; `ModelManager.beginRequest/endRequest` updates `busy/queue/active`;
+  `setLoading` wraps LCM init. On-device: `busy=true`, `loading=true` during
+  init, then `loading=false`; after completion `busy=false, queue=0`.
+- **Android mask polarity:** black 0.0, white 145.0, gray 62.1, alpha 62.1.
+- **Android load test:** 20 mixed requests → 20/20 OK, PID 12393 unchanged,
+  threads 55–56, RSS 1.9–3.9 GB (end 2.66 GB), no OOM/restart.
+- **PC regressions:** high → 8 steps, n=2 distinct, size metadata, black/white/
+  gray inpaint masks 0.0 / 86.4 / 35.1.
+- Git: new docs/source/tests are untracked; commit plan proposed (not executed,
+  pending approval).
+
+## 2026-10-23 — English-only codebase
+
+- Translated all Slovak comments, docstrings, UI strings, log messages and model
+  notes to English across Android (Kotlin + XML), PC (Python + WebUI).
+- Verified 0 Slovak diacritics in `android/**/*.kt`, `unified/**/*.py`,
+  `unified_server.py`, `download_models.py`, `webui_unified.html`.
+- Deleted unused `RemoteProxy.kt` (remote mode removed).
+- Docs translated by a subagent (ANDROID, HANDOFF, UNIFIED-CONTRACT, UNIFIED-OPS).
+- Device caveat: Vivo sometimes backgrounds the activity immediately
+  (`CanvasContext destroyed`), which breaks synthetic taps in automation.
+  Manual use is unaffected.
+
+## 2026-10-23 — PC busy/queue truth
+
+Audit asked whether PC `busy`/`queue` reflect reality. They did not:
+`ModelManager.begin()/end()` only updated `in_flight`, while `_busy` and `_queue`
+were initialized once and never touched.
+
+- Fix: `_refresh_busy_locked()` sets `busy = in_flight > 0` and
+  `queue = max(0, in_flight - 1)` after every `begin()`/`end()`. The HTTP
+  middleware already wraps POST `/v1/images/*`, `/v1/audio/*`, `/v1/chat/*`
+  in `begin()`/`end()` with `finally`, so failures reset the state too.
+- `test_model_manager_concurrency.py` gained `test_begin_end_updates_busy_and_queue`
+  (single, nested, drain, unbalanced end) — PASS.
+- New `test_pc_states.py` against a live server — PASS:
+  | Step | Observed |
+  |---|---|
+  | idle | `busy=false, queue=0, in_flight=0` |
+  | 1× 512 high | `busy=true, in_flight=1, queue=0` |
+  | 2 concurrent | `busy=true, queue=1, in_flight=2`, both 200 |
+  | after | `busy=false, queue=0, in_flight=0` |
+  | invalid inpaint (400) | state back to idle |
+- `test_pc_features.py` now asserts the earlier fixes as regressions:
+  `n=2` returns 2 distinct images, `quality=high` → `steps=8`, non-square
+  request reports `size=320x320` + `requested_size=320x256`.
+
+## 2026-10-23 — Android concurrent state test (partial)
+
+New `test_android_states.py` starts a 384×384 generation and an inpaint
+concurrently against the running app.
+
+- Verified before the disconnect: `busy=true, queue=1` while both were in
+  flight — the queue counter does reflect a second request.
+- The completion half could not be verified: USB/ADB lost the device mid-test
+  (`adb devices` empty, no Android ADB device in Windows PnP), both clients got
+  "server disconnected". No logcat, so the cause is unclassified — it may be a
+  cable/USB drop or a process death. Re-run when the phone is attached and
+  capture `adb logcat` around the test.
+- Repo: removed `test_lcm_tmp.py` and `test_android_continue.py` (scratch /
+  superseded); `test_pc_features.py` and `test_android_features.py` now write
+  sample outputs to a temp directory instead of the repo root.
+
+## 2026-10-23 — Size rule, language sweep, ffmpeg pass log
+
+- **Size rule unified:** PC now uses the larger requested side
+  (`max(w, h)`, clamped to 256–512) like Android, in all four places
+  (`_try_real_generation`, generations metadata, edits, inpaint).
+  Verified: `320x256` → `size=320x320`, `requested_size=320x256`.
+- `test_pc_features.py` regression section: `n=2` → 2 distinct images,
+  `quality=high` → `steps=8`, size metadata. Full suite **29/29 passed**;
+  `test_ffmpeg_presets.py` **23/23 passed**.
+- **Language sweep corrected the earlier claim.** The previous "0 Slovak"
+  check only looked at diacritics in Kotlin, so these were still Slovak:
+  `AndroidManifest.xml`, `cpp/CMakeLists.txt`, `cpp/whisper_jni.cpp`,
+  `build.gradle.kts`, `ModelCatalog.kt`, `ModelDownloader.kt`, WebUI,
+  `requirements.txt`, `ffmpeg_tools.py`, `lcm_onnx.py`, `tests/*` docstrings,
+  the Android `.ps1` scripts, `monitor_android.ps1`,
+  `Switch-Service-ToUnified.ps1` and the archived plan. All translated.
+  Re-scan (diacritics + Slovak stop words, excluding `values-sk/cs/de`):
+  **0 hits**.
+- **ffmpeg two-pass log leak fixed:** `compress_video` passes
+  `-passlogfile` next to the temporary output and uses `os.devnull`, so
+  `ffmpeg2pass-0.log` no longer lands in the server working directory.
+  Verified by deleting the old log and re-running `/v1/ffmpeg/compress`: no
+  file reappeared.
+- `requirements.txt` optional-dependency comments translated.
+- `python -m pytest tests -q`: **44 passed**; Android `assembleDebug`:
+  **BUILD SUCCESSFUL** (after the comment/string edits).
+

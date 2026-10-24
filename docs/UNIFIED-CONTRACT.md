@@ -1,12 +1,12 @@
-# Unified contract (PC :8101, Android :8101) — frozen pre Odysseus
+# Unified contract (PC :8101, Android :8101) — frozen for Odysseus
 
-Base: `http://<host>:8101`. LAN-only, bez auth. Všetky image routy berú `model`
-(registry id, prázdne = default) a `request_id` (echo späť).
+Base: `http://<host>:8101`. LAN-only, no auth. All image routes take `model`
+(registry id, empty = default) and `request_id` (echoed back).
 
-Legacy: staré `WhisperApi :4444/v1/audio/*` ostáva ako shim na `:8101/v1/audio/*`
-(tvar request/response identický). Nový kód volá vždy `:8101`.
+Legacy: the old `WhisperApi :4444/v1/audio/*` remains as a shim to `:8101/v1/audio/*`
+(request/response shape identical). New code always calls `:8101`.
 
-## Endpointy
+## Endpoints
 
 | Method | Path | In | Out |
 |---|---|---|---|
@@ -19,29 +19,29 @@ Legacy: staré `WhisperApi :4444/v1/audio/*` ostáva ako shim na `:8101/v1/audio
 | POST | `/v1/images/harmonize` | JSON `{image b64, prompt, strength, model, request_id}` | `{image b64, elapsed, request_id}` |
 | POST | `/v1/images/upscale` | JSON `{image b64, scale 2/3/4, model, request_id}` | `{image b64, elapsed, model, scale, request_id}` |
 | POST | `/v1/images/caption` | JSON `{image b64, prompt, max_tokens, request_id}` | `{text, elapsed, engine, request_id}` (V2, SmolVLM-500M) |
-| POST | `/v1/chat/completions` | OpenAI vision subset `{model, messages:[{role, content:str\|[{type:text\|image_url}]}]}` | `{choices:[{message:{content}}]}` (V2, bez váhy 503) |
+| POST | `/v1/chat/completions` | OpenAI vision subset `{model, messages:[{role, content:str\|[{type:text\|image_url}]}]}` | `{choices:[{message:{content}}]}` (V2, 503 without weights) |
 | GET | `/v1/models/catalog` | — | `{models:[{id, kind, label, size_gb, installed, installed_gb, install_state, install_progress, install_error}]}` |
-| POST | `/v1/models/install` | JSON `{id}` | `{id, state}` (download na pozadí; progress v catalogue) |
-| POST | `/v1/models/uninstall` | JSON `{id}` | `{id, removed}` (path guard: len `models/`) |
+| POST | `/v1/models/install` | JSON `{id}` | `{id, state}` (download in the background; progress in the catalog) |
+| POST | `/v1/models/uninstall` | JSON `{id}` | `{id, removed}` (path guard: only `models/`) |
 | GET | `/v1/settings` | — | `{version, port, whisper_url, models_dir, default_image_model, audio_models, engines:{torch,cuda,ffmpeg,ffprobe,ytdlp}}` |
 | GET | `/v1/ffmpeg/presets` | — | `{video:{...}, audio:{...}, resize:{...}}` |
 | POST | `/v1/ffmpeg/{convert-video\|convert-audio\|extract-audio\|trim\|compress\|info}` | multipart | `{file\|info, filename, request_id, info:{duration,size,format}}` |
-| POST | `/v1/audio/transcriptions` | multipart `file|audio + model, device, language` | `{text, language}` alebo `text/plain` |
+| POST | `/v1/audio/transcriptions` | multipart `file|audio + model, device, language` | `{text, language}` or `text/plain` |
 | POST | `/v1/audio/translations` | same | `{text}` |
 | GET | `/webui` | — | unified HTML (Generate/Edit-Upscale/Transcribe) |
 
-## Status kódy (zhodné s ODYSSEUS-CONTRACT + audio)
+## Status codes (identical to ODYSSEUS-CONTRACT + audio)
 
-- `200` + dáta: úspech.
-- `400`: zlý vstup (missing image, Empty file, zlý scale).
-- `415`: nepodporovaný audio formát. `413`: >100 MB.
-- `503 {"error":"loading model","loading_model":..., "retry_after":30}`: cold load — čakať, nie failure.
-- `503 {"error":"will not load",...}`: nevojde sa do VRAM ani RAM, alebo canvas >8192px — neuvoľní sa hangom.
-- `500`: reálna chyba servera.
+- `200` + data: success.
+- `400`: bad input (missing image, Empty file, bad scale).
+- `415`: unsupported audio format. `413`: >100 MB.
+- `503 {"error":"loading model","loading_model":..., "retry_after":30}`: cold load — wait, not a failure.
+- `503 {"error":"will not load",...}`: does not fit into VRAM or RAM, or canvas >8192px — it fails fast instead of hanging.
+- `500`: real server error.
 
-## Limity V1
+## V1 limits
 
-- Vždy max 1 ťažký model (SD *alebo* Whisper). Prepnutie = unload + load.
+- Always at most 1 heavy model (SD *or* Whisper). Switching = unload + load.
 - Upscale default `RealESRGAN_x4v3`, tile processing, cap 8192px.
-- Audio: 16 kHz mono normalizácia cez ffmpeg (ak je), inak passthrough wav.
-- Mobile: steps clamp 4–8 (thermal throttle po 3. generácii −40%), Vulkan (nie NNAPI).
+- Audio: 16 kHz mono normalization via ffmpeg (if available), otherwise wav passthrough.
+- Mobile: steps clamp 4–8 (thermal throttle after the 3rd generation −40%), Vulkan (not NNAPI).
