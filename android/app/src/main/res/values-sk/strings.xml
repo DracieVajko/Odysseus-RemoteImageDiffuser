@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="tab_server">Server</string>
+    <string name="tab_generate">Generovať</string>
+    <string name="tab_transcribe">Prepísať</string>
+    <string name="tab_upscale">Zväčšiť</string>
+    <string name="tab_caption">Popis</string>
+    <string name="tab_inpaint">Inpaint</string>
+    <string name="tab_tools">Nástroje</string>
+    <string name="title_generate">Generovať obrázok</string>
+    <string name="title_transcribe">Prepísať zvuk</string>
+    <string name="title_upscale">Zväčšiť obrázok</string>
+    <string name="title_caption">Popísať obrázok</string>
+    <string name="title_inpaint">Inpaint / úprava</string>
+    <string name="title_tools">Nástroje</string>
+    <string name="btn_generate">Generovať</string>
+    <string name="btn_transcribe">Prepísať</string>
+    <string name="btn_upscale">Zväčšiť 2x</string>
+    <string name="btn_caption">Popísať</string>
+    <string name="btn_inpaint">Spustiť inpaint</string>
+    <string name="btn_save_image">Uložiť obrázok</string>
+    <string name="btn_save_transcript">Uložiť prepis</string>
+    <string name="btn_open_audio">Otvoriť zvukový súbor</string>
+    <string name="btn_open_image">Otvoriť obrázok</string>
+    <string name="btn_open_mask">Otvoriť masku (biela = prekresliť)</string>
+    <string name="btn_add_model">+ Pridať model z URL</string>
+    <string name="btn_start">ŠTART</string>
+    <string name="btn_stop">STOP</string>
+    <string name="server_stopped">Server zastavený</string>
+    <string name="server_running">Server beží</string>
+    <string name="server_starting">Server sa spúšťa…</string>
+</resources>

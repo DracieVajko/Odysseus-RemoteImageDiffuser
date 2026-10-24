@@ -1,10 +1,12 @@
 package eu.odysseus.diffusion
 
 /**
- * Runtime konfigurácia appky (nastavuje MainActivity pri START).
- * ApiServer ju číta pri rozhodovaní local vs remote.
+ * Runtime configuration for the app.
+ * Everything runs locally on the phone; there is no remote/PC mode.
  */
 object AppConfig {
-    @Volatile var mode: String = "AUTO"          // LOCAL | REMOTE | AUTO
-    @Volatile var remoteBase: String = ""        // napr. http://192.168.2.110:8101
+    @Volatile var serverPort: Int = 8101
+
+    /** "auto" | "cpu" | "gpu" — selects ONNX execution providers. */
+    @Volatile var acceleration: String = "auto"
 }

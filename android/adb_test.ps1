@@ -1,6 +1,6 @@
-<# adb_test.ps1 - end-to-end test Android servera cez adb forward.
-   Pouziva curl.exe (PowerShell 5.1 nema Invoke-RestMethod -Form).
-   Pouzitie: powershell -ExecutionPolicy Bypass -File android/adb_test.ps1
+<# adb_test.ps1 - end-to-end test of the Android server through adb forward.
+   Uses curl.exe (PowerShell 5.1 has no Invoke-RestMethod -Form).
+   Usage: powershell -ExecutionPolicy Bypass -File android/adb_test.ps1
 #>
 $ErrorActionPreference = "Continue"
 $Adb = "$env:LOCALAPPDATA\Android\Sdk\platform-tools\adb.exe"
@@ -33,7 +33,7 @@ $tr = & curl.exe -s --max-time 300 -F "file=@$wav;type=audio/wav" -F "model=whis
 Write-Host $tr
 Remove-Item $wav -ErrorAction SilentlyContinue
 
-Write-Host "`n== caption (ocakavane 503 will-not-load na mobile) =="
+Write-Host "`n== caption (expects 503 will-not-load on mobile) =="
 $cap = & curl.exe -s --max-time 60 -o NUL -w "%{http_code}" -X POST -H "Content-Type: application/json" -d '{\"image\":\"e30=\"}' "http://127.0.0.1:$Local/v1/images/caption"
 Write-Host "HTTP $cap"
 & curl.exe -s --max-time 60 -X POST -H "Content-Type: application/json" -d '{\"image\":\"e30=\"}' "http://127.0.0.1:$Local/v1/images/caption"

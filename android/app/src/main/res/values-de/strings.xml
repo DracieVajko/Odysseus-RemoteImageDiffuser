@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="tab_server">Server</string>
+    <string name="tab_generate">Generieren</string>
+    <string name="tab_transcribe">Transkribieren</string>
+    <string name="tab_upscale">Hochskalieren</string>
+    <string name="tab_caption">Beschreiben</string>
+    <string name="tab_inpaint">Inpaint</string>
+    <string name="tab_tools">Werkzeuge</string>
+    <string name="title_generate">Bild generieren</string>
+    <string name="title_transcribe">Audio transkribieren</string>
+    <string name="title_upscale">Bild hochskalieren</string>
+    <string name="title_caption">Bild beschreiben</string>
+    <string name="title_inpaint">Inpaint / Bearbeiten</string>
+    <string name="title_tools">Werkzeuge</string>
+    <string name="btn_generate">Generieren</string>
+    <string name="btn_transcribe">Transkribieren</string>
+    <string name="btn_upscale">2x hochskalieren</string>
+    <string name="btn_caption">Beschreiben</string>
+    <string name="btn_inpaint">Inpaint starten</string>
+    <string name="btn_save_image">Bild speichern</string>
+    <string name="btn_save_transcript">Transkript speichern</string>
+    <string name="btn_open_audio">Audiodatei öffnen</string>
+    <string name="btn_open_image">Bild öffnen</string>
+    <string name="btn_open_mask">Maske öffnen (weiß = neu zeichnen)</string>
+    <string name="btn_add_model">+ Modell per URL hinzufügen</string>
+    <string name="btn_start">START</string>
+    <string name="btn_stop">STOP</string>
+    <string name="server_stopped">Server gestoppt</string>
+    <string name="server_running">Server läuft</string>
+    <string name="server_starting">Server startet…</string>
+</resources>

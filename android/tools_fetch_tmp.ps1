@@ -1,5 +1,5 @@
-# Stiahne Android cmdline-tools do SDK (predpoklad pre NDK/CMake cez sdkmanager).
-# curl.exe miesto Invoke-WebRequest (to padá v non-interaktívnom shelli 0x5AD).
+# Downloads Android cmdline-tools into the SDK (prerequisite for NDK/CMake via sdkmanager).
+# curl.exe instead of Invoke-WebRequest (the latter fails in a non-interactive shell, 0x5AD).
 $ErrorActionPreference = "Stop"
 $sdk = "$env:LOCALAPPDATA\Android\Sdk"
 $zip = "$env:TEMP\cmdtools.zip"

@@ -1,5 +1,5 @@
-<# fetch_third_party.ps1 — naklonuje C++ zdroje mimo git (vyžaduje .gitignore výnimku).
-Spustiť raz z android/ adresára:
+<# fetch_third_party.ps1 — clones the C++ sources outside git (requires the .gitignore exception).
+Run once from the android/ directory:
   powershell -ExecutionPolicy Bypass -File fetch_third_party.ps1
 #>
 $ErrorActionPreference = "Stop"

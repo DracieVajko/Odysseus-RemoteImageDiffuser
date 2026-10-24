@@ -10,26 +10,26 @@ import java.nio.ByteBuffer
 import java.nio.ByteOrder
 
 /**
- * Dekóder zvuku na 16 kHz, 16-bit mono float PCM pole (vstup pre whisper.cpp).
+* Audio decoder to 16 kHz, 16-bit mono float PCM array (input for whisper.cpp).
  *
  * Podporuje:
- * 1. Priamy WAV parser pre 16 kHz 16-bit PCM.
+ * 1. Direct WAV parser for 16 kHz 16-bit PCM.
  * 2. Android MediaCodec + MediaExtractor pre M4A, MP3, OGG, FLAC, MP4.
  */
 object AudioDecoder {
     const val TARGET_SAMPLE_RATE = 16000
 
-    /** Dekóduje zvukové bajty na 16 kHz mono FloatArray v rozsahu [-1.0f, 1.0f]. */
+/** Decode audio bytes to a 16 kHz mono FloatArray in the range [-1.0f, 1.0f]. */
     fun decodeToPcmFloats(audioBytes: ByteArray, tempDir: File): FloatArray {
         if (audioBytes.isEmpty()) return FloatArray(0)
 
-        // Skús najprv rýchly WAV parser
+// Try the fast WAV parser first
         if (isWavFormat(audioBytes)) {
             val wavFloats = parseWavToFloats(audioBytes)
             if (wavFloats != null) return wavFloats
         }
 
-        // Ak nie je WAV alebo má iný sample rate, použi Android MediaCodec via temp súbor
+// If not WAV or a different sample rate, use Android MediaCodec via a temp file
         val tempFile = File(tempDir, "temp_audio_${System.currentTimeMillis()}.tmp")
         try {
             FileOutputStream(tempFile).use { it.write(audioBytes) }
@@ -80,7 +80,7 @@ object AudioDecoder {
             }
 
             if (dataOffset == -1 || audioFormat != 1 || bitsPerSample != 16) {
-                return null // Nepodporovaný WAV tvar, fallback na MediaCodec
+return null // Unsupported WAV shape, fall back to MediaCodec
             }
 
             val numSamples = dataSize / 2
@@ -90,7 +90,7 @@ object AudioDecoder {
                 rawShorts[i] = pcmBuf.short
             }
 
-            // Downmix na mono ak je stereo
+        // Downmix to mono if stereo
             val monoShorts = if (numChannels > 1) {
                 val frames = numSamples / numChannels
                 ShortArray(frames) { i ->
@@ -104,14 +104,14 @@ object AudioDecoder {
                 rawShorts
             }
 
-            // Resample na 16 kHz ak je iný sample rate
+// Resample to 16 kHz if the sample rate differs
             val finalShorts = if (sampleRate != TARGET_SAMPLE_RATE) {
                 resampleLinear(monoShorts, sampleRate, TARGET_SAMPLE_RATE)
             } else {
                 monoShorts
             }
 
-            // Preveď short na normalized float [-1.0, 1.0]
+        // Convert short to normalized float [-1.0, 1.0]
             return FloatArray(finalShorts.size) { i -> finalShorts[i] / 32768.0f }
         } catch (e: Exception) {
             return null
@@ -187,13 +187,13 @@ object AudioDecoder {
 
         if (pcmBytes.isEmpty()) return FloatArray(0)
 
-        // Preveď dekódované 16-bit PCM bajty na shorts
+// Convert decoded 16-bit PCM bytes to shorts
         val byteArr = pcmBytes.toByteArray()
         val numShorts = byteArr.size / 2
         val shorts = ShortArray(numShorts)
         ByteBuffer.wrap(byteArr).order(ByteOrder.LITTLE_ENDIAN).asShortBuffer().get(shorts)
 
-        // Downmix na mono ak je stereo
+        // Downmix to mono if stereo
         val monoShorts = if (channels > 1) {
             val frames = numShorts / channels
             ShortArray(frames) { i ->
@@ -207,7 +207,7 @@ object AudioDecoder {
             shorts
         }
 
-        // Lineárny resampling na 16 kHz ak treba
+// Linear resampling to 16 kHz if needed
         val resampled = if (sampleRate != TARGET_SAMPLE_RATE) {
             resampleLinear(monoShorts, sampleRate, TARGET_SAMPLE_RATE)
         } else {

@@ -1,5 +1,5 @@
-# Nainštaluje NDK r27 + CMake 3.22.1 (PIN v app/build.gradle.kts).
-# Dlhé sťahovanie (~1 GB) — púšťať na pozadí.
+# Installs NDK r27 + CMake 3.22.1 (PIN in app/build.gradle.kts).
+# Long download (~1 GB) — run it in the background.
 $ErrorActionPreference = "Continue"
 $sdk = "$env:LOCALAPPDATA\Android\Sdk"
 $sm = "$sdk\cmdline-tools\latest\bin\sdkmanager.bat"

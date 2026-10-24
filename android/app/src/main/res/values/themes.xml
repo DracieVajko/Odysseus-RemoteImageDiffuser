@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <!-- MaterialComponents téma: povinná pre MaterialCardView/MaterialButton
+    <!-- MaterialComponents theme: required for MaterialCardView/MaterialButton
          (AppCompat theme crashuje na ThemeEnforcement.checkMaterialTheme). -->
     <style name="Theme.Odysseus" parent="Theme.MaterialComponents.DayNight.NoActionBar">
         <item name="colorPrimary">#2F81F7</item>

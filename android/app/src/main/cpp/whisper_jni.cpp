@@ -1,12 +1,12 @@
-// JNI most pre WhisperLib.kt (eu.odysseus.diffusion.WhisperLib).
+// JNI bridge for WhisperLib.kt (eu.odysseus.diffusion.WhisperLib).
 //
-// Tenká vrstva nad stabilným whisper.cpp C API (v1.9.5, overené v
+// Thin layer over the stable whisper.cpp C API (v1.9.5, verified in
 // third_party/whisper.cpp/include/whisper.h):
 //   whisper_init_from_file / whisper_full / whisper_full_n_segments /
 //   whisper_full_get_segment_text / whisper_free
-// Žiadna logika navyše: dekódovanie/resampling robí AudioDecoder.kt,
-// thready clampuje Kotlin (1..4). Chyby sa vracajú ako "[error] ..." text,
-// nikdy pádom (kontrakt: zlý vstup = text, nie crash).
+// No extra logic: decoding/resampling is done by AudioDecoder.kt,
+// threads are clamped by Kotlin (1..4). Errors are returned as "[error] ..."
+// text, never by crashing (contract: bad input = text, not a crash).
 #include <jni.h>
 
 #include <string>
@@ -25,7 +25,7 @@ std::string collect_text(struct whisper_context * ctx) {
             out += t;
         }
     }
-    // Segmenty nesú vlastné medzery; len orežeme okraje.
+    // Segments keep their own spacing; only trim the edges.
     const auto beg = out.find_first_not_of(" \t\r\n");
     if (beg == std::string::npos) {
         return "";
@@ -89,9 +89,13 @@ Java_eu_odysseus_diffusion_WhisperLib_fullTranscribe(
     }
 
     whisper_full_params params = whisper_full_default_params(WHISPER_SAMPLING_GREEDY);
-    params.n_threads = numThreads < 1 ? 1 : (numThreads > 4 ? 4 : numThreads);
+    params.n_threads = numThreads < 1 ? 1 : (numThreads > 8 ? 8 : numThreads);
     params.translate = (translate == JNI_TRUE);
     params.language = lang.c_str();
+    params.no_context = true;
+    params.print_progress = false;
+    params.print_realtime = false;
+    params.print_timestamps = false;
 
     std::string result;
     if (whisper_full(ctx, params, data, n) != 0) {

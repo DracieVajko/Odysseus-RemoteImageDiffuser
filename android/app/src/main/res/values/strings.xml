@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Prism</string>
+    <string name="tab_server">Server</string>
+    <string name="tab_generate">Generate</string>
+    <string name="tab_transcribe">Transcribe</string>
+    <string name="tab_upscale">Upscale</string>
+    <string name="tab_caption">Caption</string>
+    <string name="tab_inpaint">Inpaint</string>
+    <string name="tab_tools">Tools</string>
+    <string name="title_generate">Generate image</string>
+    <string name="title_transcribe">Transcribe audio</string>
+    <string name="title_upscale">Upscale image</string>
+    <string name="title_caption">Caption image</string>
+    <string name="title_inpaint">Inpaint / edit</string>
+    <string name="title_tools">Tools</string>
+    <string name="btn_generate">Generate</string>
+    <string name="btn_transcribe">Transcribe</string>
+    <string name="btn_upscale">Upscale 2x</string>
+    <string name="btn_caption">Caption</string>
+    <string name="btn_inpaint">Run inpaint</string>
+    <string name="btn_save_image">Save image</string>
+    <string name="btn_save_transcript">Save transcript</string>
+    <string name="btn_open_audio">Open audio file</string>
+    <string name="btn_open_image">Open image file</string>
+    <string name="btn_open_mask">Open mask file (white = repaint)</string>
+    <string name="btn_add_model">+ Add model by URL</string>
+    <string name="btn_start">START</string>
+    <string name="btn_stop">STOP</string>
+    <string name="server_stopped">Server stopped</string>
+    <string name="server_running">Server running</string>
+    <string name="server_starting">Server starting…</string>
+</resources>

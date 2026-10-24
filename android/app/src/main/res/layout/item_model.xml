@@ -24,7 +24,7 @@
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:text="model"
-                android:textColor="#E8EAF0"
+                android:textColor="@color/prism_text"
                 android:textSize="13sp"
                 android:textStyle="bold" />
 
@@ -33,7 +33,7 @@
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:text="0 MB"
-                android:textColor="#7D8590"
+                android:textColor="@color/prism_muted"
                 android:textSize="11sp" />
         </LinearLayout>
 
@@ -48,7 +48,7 @@
             android:text="Download"
             android:textSize="11sp"
             app:cornerRadius="8dp"
-            app:strokeColor="#30363D" />
+            app:strokeColor="@color/prism_border" />
     </LinearLayout>
 
     <ProgressBar

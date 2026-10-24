@@ -1,7 +1,13 @@
 package eu.odysseus.diffusion
 
 import io.ktor.http.HttpStatusCode
-import io.ktor.serialization.kotlinx.json.json
+import com.google.gson.GsonBuilder
+import com.google.gson.JsonArray
+import com.google.gson.JsonElement
+import com.google.gson.JsonNull
+import com.google.gson.JsonObject
+import com.google.gson.JsonPrimitive
+import io.ktor.serialization.gson.gson
 import io.ktor.server.application.Application
 import io.ktor.server.application.call
 import io.ktor.server.application.install
@@ -25,43 +31,39 @@ import io.ktor.http.content.PartData
 import io.ktor.http.content.forEachPart
 import io.ktor.utils.io.core.readBytes
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.decodeFromString
 import kotlinx.serialization.json.Json
-import kotlinx.serialization.json.JsonArray
-import kotlinx.serialization.json.JsonElement
-import kotlinx.serialization.json.JsonNull
-import kotlinx.serialization.json.JsonObject
-import kotlinx.serialization.json.JsonPrimitive
 import java.io.File
 import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
 
 // ---------------------------------------------------------------------------
-// Zmluva: rovnaké cesty + rovnaké 503 tvary ako docs/ODYSSEUS-CONTRACT.md.
+// Contract: same paths + same 503 shapes as docs/ODYSSEUS-CONTRACT.md.
 // Base: http://<phone>:8101
 //
 // Rozdiely (mobile V1, research verdikty):
-// - quality→steps sa capuje na 4..8 (LCM režim); viac = OOM na Adreno/Mali.
-// - backend NCNN + Vulkan (nie NNAPI).
+// - quality→steps is capped to 4..8 (LCM mode); more = OOM on Adreno/Mali.
+// - backend NCNN + Vulkan (not NNAPI).
 // Stav inferencie (mobile V1):
-// - audio: REÁLNE (AudioDecoder → WhisperLib JNI → libwhisper.so z CMake buildu).
-// - image/upscale: STUB (1×1 PNG) + 503 will-not-load bez váh; NCNN hooky TODO(NCNN).
-//   Dôvod: overený NCNN zdroj pre LCM neexistuje (pozri ModelCatalog).
+// - audio: REAL (AudioDecoder → WhisperLib JNI → libwhisper.so from the CMake build).
+// - image: REAL via ONNX LCM (QDQ UNet); upscale/caption/chat are experimental.
+//   See docs/ONDEVICE-PLAN.md for the on-device roadmap.
 // ---------------------------------------------------------------------------
 
 const val SERVER_PORT = 8101
 const val MOBILE_STEPS_MIN = 4
 const val MOBILE_STEPS_MAX = 8
 const val MAX_CANVAS_PX = 8192
-const val MAX_AUDIO_BYTES = 100L * 1024L * 1024L // 100 MB, ako WhisperApi
+const val MAX_AUDIO_BYTES = 100L * 1024L * 1024L // 100 MB, same as WhisperApi
 
-/** quality → steps, potom clamp do [MOBILE_STEPS_MIN, MOBILE_STEPS_MAX]. */
+/** quality → steps, then clamp to [MOBILE_STEPS_MIN, MOBILE_STEPS_MAX]. */
 fun mobileSteps(quality: String?, steps: Int?): Int {
     val base = when (steps) {
         null -> when (quality ?: "medium") {
             "low" -> 4
             "high" -> 30
             "auto" -> 12
-            else -> 25 // medium = profile default (zrkadlo servera)
+        else -> 25 // medium = profile default (mirrors the server)
         }
         else -> steps
     }
@@ -72,6 +74,8 @@ fun mobileSteps(quality: String?, steps: Int?): Int {
 data class GenerationReq(
     val model: String = "",
     val prompt: String = "",
+    val negative_prompt: String = "",
+    val guidance: Float = 1.0f,
     val n: Int = 1,
     val size: String = "512x512",
     val quality: String = "medium",
@@ -84,6 +88,10 @@ data class InpaintReq(
     val image: String = "",
     val mask: String = "",
     val prompt: String = "",
+    val negative_prompt: String = "",
+    val guidance: Float = 1.0f,
+    val mode: String = "add",
+    val color: String = "#0066FF",
     val width: Int = 512,
     val height: Int = 512,
     val steps: Int? = null,
@@ -136,22 +144,39 @@ data class JobProgress(
     var percent: Int = 0,
 )
 
-/** Bezpečná JSON odpoveď: Map<String, Any> kotlinx-serialization nevie
- *  serializovať (Any nemá serializer) a Ktor potom vráti tichý 500.
- *  jsonOf() rekurzívne prevedie Map/List/primitívy na JsonElement. */
+/** Safe JSON response: Map<String, Any> cannot be serialized by kotlinx-serialization
+*  (Any has no serializer) and Ktor then returns a silent 500.
+*  jsonOf() recursively converts Map/List/primitives to Gson JsonElement.
+*  NOTE: we use Gson tree types (not just the Gson serializer) because Gson cannot
+*  serialize kotlinx JsonElement — via reflection it would produce
+*  {"content": "...", "isString": true} instead of the raw JSON shape. */
 fun anyToJson(v: Any?): JsonElement = when (v) {
-    null -> JsonNull
+    null -> JsonNull.INSTANCE
     is JsonElement -> v
     is Boolean -> JsonPrimitive(v)
     is Number -> JsonPrimitive(v)
     is String -> JsonPrimitive(v)
-    is Map<*, *> -> JsonObject(v.entries.associate { (k, vv) -> k.toString() to anyToJson(vv) })
-    is Iterable<*> -> JsonArray(v.map { anyToJson(it) })
+    is Map<*, *> -> JsonObject().apply {
+        v.forEach { (k, vv) -> add(k.toString(), anyToJson(vv)) }
+    }
+    is Iterable<*> -> JsonArray().apply {
+        v.forEach { add(anyToJson(it)) }
+    }
     else -> JsonPrimitive(v.toString())
 }
 
 fun jsonOf(vararg pairs: Pair<String, Any?>): JsonObject =
-    JsonObject(pairs.associate { (k, v) -> k to anyToJson(v) })
+    JsonObject().apply {
+        pairs.forEach { (k, v) -> add(k, anyToJson(v)) }
+    }
+
+/** Request body: kotlinx-serialization (defaults + ignoreUnknownKeys), not Gson.
+*  Gson ignores Kotlin defaults via reflection and leaves missing String fields null. */
+private val wireJson = Json {
+    ignoreUnknownKeys = true
+    isLenient = true
+    coerceInputValues = true
+}
 
 class ApiServer(
     private val manager: ModelManager,
@@ -162,8 +187,8 @@ class ApiServer(
     private var engine: NettyApplicationEngine? = null
 
     fun start(wait: Boolean = false): NettyApplicationEngine {
-        // Explicit 0.0.0.0: default bind may be IPv6-only ([::]), ktorý adb forward
-        // (IPv4 127.0.0.1) nevie dosiahnuť — requesty potom visia/500.
+// Explicit 0.0.0.0: the default bind may be IPv6-only ([::]), which adb forward
+// (IPv4 127.0.0.1) cannot reach — requests then hang/500.
         val eng = embeddedServer(Netty, host = "0.0.0.0", port = SERVER_PORT) { module() }
         engine = eng
         eng.start(wait = wait)
@@ -176,17 +201,13 @@ class ApiServer(
     }
 
     private fun Application.module() {
-        // Remote fallback: image/upscale/caption/ffmpeg idú na PC, ak je
-        // nastavený remote a režim REMOTE/AUTO. Audio ostáva lokálne (JNI).
-        intercept(io.ktor.server.application.ApplicationCallPipeline.Call) {
-            val path = call.request.path()
-            val method = call.request.httpMethod.value
-            if (ProxyForward.shouldProxy(path, method)) {
-                if (ProxyForward.forward(call)) finish()
-            }
-        }
+        // Remote fallback: endpoint handlers handle auto-forward via try-catch on ModelWillNotLoadError
+// Audio stays local (JNI). Image generation is local too (ONNX).
         install(ContentNegotiation) {
-            json(Json { ignoreUnknownKeys = true; explicitNulls = false })
+            gson {
+                setPrettyPrinting()
+                setLenient()
+            }
         }
         install(StatusPages) {
             exception<Throwable> { call, e ->
@@ -218,16 +239,31 @@ class ApiServer(
                 )
             }
         }
+
+
+        // Track in-flight image/audio requests for /health busy/queue.
+        intercept(io.ktor.server.application.ApplicationCallPipeline.Monitoring) {
+            val path = call.request.path()
+            val track = path.startsWith("/v1/images/") || path.startsWith("/v1/audio/")
+            if (track) manager.beginRequest()
+            try {
+                proceed()
+            } finally {
+                if (track) manager.endRequest()
+            }
+        }
         routing {
             get("/health") {
                 val st = manager.status()
+                val all = downloader.allAssets()
                 call.respond(
                     jsonOf(
                         "status" to "ok",
                         "model" to (st.loadedId ?: ""),
                         "current_model" to (st.loadedId ?: ""),
                         "device" to "vulkan-ncnn",
-                        "available_models" to listOf("lcm-dreamshaper-int8", "whisper-small-q5_1"),
+                        "available_models" to all.filter { downloader.isReady(it.id) }.map { it.id },
+                        "catalog_models" to all.map { it.id },
                         "loading" to st.loading,
                         "loading_model" to st.loadingModel,
                         "busy" to st.busy,
@@ -237,14 +273,19 @@ class ApiServer(
             }
             get("/v1/models") {
                 val st = manager.status()
-                val data = ModelCatalog.assets.map { a ->
+                val all = downloader.allAssets()
+                val data = all.map { a ->
                     jsonOf(
                         "id" to a.id,
                         "object" to "model",
                         "owned_by" to "odysseus-local",
                         "kind" to a.kind,
+                        "label" to a.label,
+                        "engine" to a.engine,
                         "available" to downloader.isReady(a.id),
-                        "has_source" to a.url.isNotBlank(),
+                        "has_source" to a.hasSource,
+                        "runs_on_device" to a.runsOnDevice,
+                        "installed_mb" to downloader.installedSizeMb(a.id),
                     )
                 }
                 call.respond(
@@ -254,12 +295,15 @@ class ApiServer(
                         "currently_loaded_model" to (st.loadedId ?: ""),
                         "loading" to st.loading,
                         "loading_model" to st.loadingModel,
-                        // warning len pre modely, ktoré MAJÚ zdroj a nie sú stiahnuté
-                        "missing_models" to ModelCatalog.assets
-                            .filter { it.url.isNotBlank() && !downloader.isReady(it.id) }
+// warning only for models that HAVE a source and are not downloaded
+                        "missing_models" to all
+                            .filter { it.hasSource && !downloader.isReady(it.id) }
                             .map { it.id },
-                        "default_audio_model" to "whisper-small-q5_1",
-                        "audio_models" to ModelCatalog.assets.filter { it.kind == "audio" }.map { it.id },
+                        "default_audio_model" to "whisper-large-v3-turbo-q5_0",
+                        "audio_models" to all.filter { it.kind == "audio" }.map { it.id },
+                        "kinds" to ModelCatalog.kinds.map { k ->
+                            jsonOf("id" to k, "label" to ModelCatalog.kindLabel(k))
+                        },
                     ),
                 )
             }
@@ -316,121 +360,154 @@ class ApiServer(
                     call.respond(HttpStatusCode.BadGateway, jsonOf("error" to (e.message ?: "hf search failed")))
                 }
             }
-            // Vlastný model na mobile: podporovaný je single-file URL
-            // (GGUF/ONNX/safetensors). Diffusers snapshot treba stiahnuť na PC.
+// Custom model: the user provides a direct URL (GGUF/ONNX/bin/safetensors)
+// and the model is stored in models/<name>/ and downloaded immediately.
             post("/v1/models/add") {
                 val body = call.receiveText()
-                val url = Regex("\"url\"\\s*:\\s*\"([^\"]+)\"").find(body)?.groupValues?.get(1)
+                fun field(k: String): String? =
+                    Regex("\"$k\"\\s*:\\s*\"([^\"]*)\"").find(body)?.groupValues?.get(1)
+                val url = field("url")
                 if (url.isNullOrBlank()) {
                     call.respond(
-                        HttpStatusCode.NotImplemented,
-                        jsonOf("error" to "mobile supports single-file URL only; download diffusers snapshots on PC"),
+                        HttpStatusCode.BadRequest,
+                        jsonOf("error" to "missing url (direct file URL, e.g. HF resolve/main/...)"),
                     )
                     return@post
                 }
-                val ctx = appContext
-                if (ctx == null) {
-                    call.respond(HttpStatusCode.InternalServerError, jsonOf("error" to "no app context"))
-                    return@post
-                }
-                val fileName = url.substringAfterLast('/').substringBefore('?')
-                val name = (Regex("\"name\"\\s*:\\s*\"([^\"]+)\"").find(body)?.groupValues?.get(1)
-                    ?: fileName.substringBeforeLast('.')).replace("..", "_")
+                val name = field("name")
+                    ?: url.substringAfterLast('/').substringBefore('?').substringBeforeLast('.')
+                val kind = field("kind") ?: "custom"
                 try {
-                    val dm = ctx.getSystemService(android.content.Context.DOWNLOAD_SERVICE)
-                        as android.app.DownloadManager
-                    val req = android.app.DownloadManager.Request(android.net.Uri.parse(url))
-                        .setTitle("Odysseus: $name")
-                        .setNotificationVisibility(android.app.DownloadManager.Request.VISIBILITY_VISIBLE)
-                        .setDestinationInExternalFilesDir(
-                            ctx,
-                            android.os.Environment.DIRECTORY_DOWNLOADS,
-                            "models/$name/$fileName",
-                        )
-                    val id = dm.enqueue(req)
-                    call.respond(jsonOf("name" to name, "state" to "downloading", "download_id" to id))
-                } catch (e: Exception) {
-                    call.respond(HttpStatusCode.BadRequest, jsonOf("error" to (e.message ?: "enqueue failed")))
-                }
-            }
-            get("/webui") {
-                // Rovnaké UI ako PC: HTML sa balí do APK (assets/webui.html).
-                val html = appContext?.assets?.open("webui.html")
-                    ?.bufferedReader()?.use { it.readText() }
-                if (html == null) {
-                    call.respondText(
-                        "<h3>WebUI asset missing</h3>",
-                        ContentType.Text.Html,
-                        HttpStatusCode.InternalServerError,
+                    val asset = downloader.addCustom(name, kind, url, field("label") ?: "")
+                    call.respond(
+                        jsonOf(
+                            "id" to asset.id,
+                            "name" to asset.id,
+                            "kind" to asset.kind,
+                            "state" to "downloading",
+                            "path" to File(downloader.modelsDir(), asset.id).absolutePath,
+                        ),
                     )
-                } else {
-                    call.respondText(html, ContentType.Text.Html)
+                } catch (e: Exception) {
+                    call.respond(HttpStatusCode.BadRequest, jsonOf("error" to (e.message ?: "add failed")))
                 }
             }
             get("/v1/models/custom") {
                 val root = downloader.modelsDir()
-                val known = ModelCatalog.assets.map { it.id }.toSet()
-                val rows = (root.listFiles() ?: emptyArray())
-                    .filter { it.isDirectory && !it.name.startsWith(".") && it.name !in known }
-                    .map { d ->
-                        val mb = d.walkTopDown().filter { f -> f.isFile }.sumOf { f -> f.length() } / (1024 * 1024)
-                        jsonOf("name" to d.name, "size_gb" to (mb / 1024.0), "path" to d.absolutePath)
-                    }
+                val rows = downloader.customAssets().map { a ->
+                    jsonOf(
+                        "id" to a.id,
+                        "name" to a.id,
+                        "kind" to a.kind,
+                        "url" to a.url,
+                        "size_mb" to downloader.installedSizeMb(a.id),
+                        "installed" to downloader.isReady(a.id),
+                        "state" to (downloader.progress(a.id)?.state?.name?.lowercase() ?: "idle"),
+                        "path" to File(root, a.id).absolutePath,
+                    )
+                }
                 call.respond(jsonOf("models" to rows, "models_dir" to root.absolutePath))
             }
             post("/v1/models/delete") {
                 val body = call.receiveText()
                 val name = Regex("\"name\"\\s*:\\s*\"([^\"]+)\"").find(body)?.groupValues?.get(1)
+                    ?: Regex("\"id\"\\s*:\\s*\"([^\"]+)\"").find(body)?.groupValues?.get(1)
                 if (name.isNullOrBlank() || name.contains("/") || name.contains("\\") || name == "..") {
                     return@post call.respond(HttpStatusCode.BadRequest, jsonOf("error" to "invalid model name"))
                 }
-                if (ModelCatalog.assets.any { it.id == name }) {
+                if (ModelCatalog.find(name) != null) {
                     return@post call.respond(
                         HttpStatusCode.BadRequest,
                         jsonOf("error" to "catalog model: use uninstall instead"),
                     )
                 }
-                val dir = File(downloader.modelsDir(), name)
-                if (!dir.isDirectory) {
+                if (downloader.findAsset(name) == null) {
                     return@post call.respond(HttpStatusCode.NotFound, jsonOf("error" to "model not found: $name"))
                 }
-                val ok = dir.deleteRecursively()
+                val ok = downloader.uninstall(name)
                 call.respond(jsonOf("name" to name, "removed" to ok))
             }
             get("/v1/models/catalog") {
-                val rows = ModelCatalog.assets.map { a ->
+                val rows = downloader.allAssets().map { a ->
+                    val p = downloader.progress(a.id)
                     jsonOf(
                         "id" to a.id,
                         "kind" to a.kind,
+                        "kind_label" to ModelCatalog.kindLabel(a.kind),
                         "label" to a.label,
+                        "engine" to a.engine,
+                        "note" to a.note,
+                        "custom" to a.custom,
+                        "runs_on_device" to a.runsOnDevice,
+                        "size_mb" to a.sizeMb,
                         "size_gb" to (a.sizeMb / 1024.0),
+                        "files" to a.files.map { it.path },
                         "installed" to downloader.isReady(a.id),
                         "installed_gb" to (downloader.installedSizeMb(a.id) / 1024.0),
-                        "install_state" to if (downloader.isReady(a.id)) "done" else "idle",
-                        "install_progress" to 0,
+                        "install_state" to (p?.state?.name?.lowercase() ?: if (downloader.isReady(a.id)) "done" else "idle"),
+                        "install_progress" to (p?.percent ?: 0),
+                        "install_error" to (p?.error ?: ""),
                         "url" to a.url,
-                        "has_source" to a.url.isNotBlank(),
+                        "has_source" to a.hasSource,
+                        "downloadable" to a.hasSource,
                     )
                 }
-                call.respond(jsonOf("models" to rows))
+                call.respond(
+                    jsonOf(
+                        "models" to rows,
+                        "kinds" to ModelCatalog.kinds.map { k ->
+                            jsonOf("id" to k, "label" to ModelCatalog.kindLabel(k))
+                        },
+                    ),
+                )
+            }
+            get("/v1/models/progress/{id}") {
+                val id = call.parameters["id"] ?: ""
+                val p = downloader.progress(id)
+                    ?: return@get call.respond(
+                        jsonOf("id" to id, "state" to "idle", "percent" to 0, "bytes_done" to 0, "bytes_total" to 0),
+                    )
+                call.respond(
+                    jsonOf(
+                        "id" to id,
+                        "state" to p.state.name.lowercase(),
+                        "percent" to p.percent,
+                        "bytes_done" to p.bytesDone,
+                        "bytes_total" to p.bytesTotal,
+                        "file_index" to p.fileIndex,
+                        "file_count" to p.fileCount,
+                        "error" to p.error,
+                    ),
+                )
+            }
+            post("/v1/models/cancel") {
+                val body = call.receiveText()
+                val id = Regex("\"id\"\\s*:\\s*\"([^\"]+)\"").find(body)?.groupValues?.get(1)
+                    ?: return@post call.respond(HttpStatusCode.BadRequest, jsonOf("error" to "missing id"))
+                downloader.cancel(id)
+                call.respond(jsonOf("id" to id, "state" to "cancelled"))
             }
             post("/v1/models/install") {
                 val body = call.receiveText()
                 val id = Regex("\"id\"\\s*:\\s*\"([^\"]+)\"").find(body)?.groupValues?.get(1)
                     ?: return@post call.respond(HttpStatusCode.BadRequest, jsonOf("error" to "missing id"))
-                val asset = ModelCatalog.assets.firstOrNull { it.id == id }
+                val asset = downloader.findAsset(id)
                     ?: return@post call.respond(HttpStatusCode.NotFound, jsonOf("error" to "unknown model id: $id"))
-                if (asset.url.isBlank()) {
+                if (!asset.hasSource) {
                     return@post call.respond(HttpStatusCode.BadRequest, jsonOf("error" to "no verified source for $id"))
                 }
-                val dlId = downloader.enqueue(asset)
-                call.respond(jsonOf("id" to id, "state" to "downloading", "download_id" to dlId))
+                try {
+                    downloader.enqueue(asset)
+                    call.respond(jsonOf("id" to id, "state" to "downloading", "size_mb" to asset.sizeMb))
+                } catch (e: Exception) {
+                    call.respond(HttpStatusCode.BadRequest, jsonOf("error" to (e.message ?: "enqueue failed")))
+                }
             }
             post("/v1/models/uninstall") {
                 val body = call.receiveText()
                 val id = Regex("\"id\"\\s*:\\s*\"([^\"]+)\"").find(body)?.groupValues?.get(1)
                     ?: return@post call.respond(HttpStatusCode.BadRequest, jsonOf("error" to "missing id"))
-                if (ModelCatalog.assets.none { it.id == id }) {
+                if (downloader.findAsset(id) == null) {
                     return@post call.respond(HttpStatusCode.NotFound, jsonOf("error" to "unknown model id: $id"))
                 }
                 val ok = downloader.uninstall(id)
@@ -445,7 +522,7 @@ class ApiServer(
                         "whisper_url" to "local (JNI libwhisper_jni.so)",
                         "models_dir" to downloader.modelsDir().absolutePath,
                         "default_image_model" to "lcm-dreamshaper-int8-onnx",
-                        "audio_models" to ModelCatalog.assets.filter { it.kind == "audio" }.map { it.id },
+                        "audio_models" to downloader.allAssets().filter { it.kind == "audio" }.map { it.id },
                         "engines" to jsonOf(
                             "torch" to false,
                             "cuda" to false,
@@ -457,8 +534,8 @@ class ApiServer(
                     ),
                 )
             }
-            // FFmpeg Tools: na zariadení nie sú (MediaCodec pokrýva audio
-            // dekódovanie pre whisper). WebUI tab funguje na PC / v Remote mode.
+// FFmpeg Tools: not available on device yet (MediaCodec covers audio
+// decoding for whisper).
             get("/v1/ffmpeg/presets") {
                 call.respond(
                     HttpStatusCode.ServiceUnavailable,
@@ -472,7 +549,7 @@ class ApiServer(
                 )
             }
             post("/v1/images/generations") {
-                val req = call.receive<GenerationReq>()
+                val req = wireJson.decodeFromString<GenerationReq>(call.receiveText())
                 if (req.n !in 1..4) {
                     call.respond(HttpStatusCode.BadRequest, jsonOf("error" to "n must be 1..4"))
                     return@post
@@ -486,26 +563,61 @@ class ApiServer(
                     return@post
                 }
                 val rid = req.request_id.ifEmpty { UUID.randomUUID().toString() }
-                val steps = mobileSteps(req.quality, req.steps)
-                val modelId = req.model.ifEmpty { "lcm-dreamshaper-int8" }
-                switchTo("image", modelId) // 503 loading → StatusPages
-                requireModelReady("lcm-dreamshaper-int8") // 503 will-not-load bez váh
-                val job = JobProgress(rid, JobState.RUNNING, 0, steps, 0)
-                progress[rid] = job
-                // TODO(NCNN): Vulkan LCM-Dreamshaper INT8 inferencia, n=req.n, w×h, steps.
-                job.status = JobState.DONE
-                job.step = steps
-                job.percent = 100
+                val steps = mobileSteps(req.quality, req.steps).coerceIn(1, 8)
+                val modelId = req.model.ifEmpty { "lcm-dreamshaper-int8-onnx" }
+                if (!downloader.isReady(modelId)) {
+                    throw ModelWillNotLoadError("model $modelId not downloaded (see ModelDownloader)", -1, -1)
+                }
+                val ctx = appContext
+                if (ctx == null) {
+                    call.respond(HttpStatusCode.InternalServerError, jsonOf("error" to "no app context"))
+                    return@post
+                }
+                val modelDir = downloader.modelDir(modelId)
+                WhisperLib.release()
+                if (!LcmOnnxEngine.isReady()) {
+                    manager.setLoading(modelId, true)
+                    try {
+                        if (!LcmOnnxEngine.init(ctx, modelDir)) {
+                            throw ModelWillNotLoadError("LCM engine init failed: " + LcmOnnxEngine.lastError, -1, -1)
+                        }
+                    } finally {
+                        manager.setLoading(modelId, false)
+                    }
+                }
+                // The ONNX engine is square; use the larger side and report the
+                // actual size (the requested WxH may be non-square or > 512).
+                val side = maxOf(w, h).coerceIn(256, 512)
+                val images = ArrayList<String>(req.n)
+                for (i in 0 until req.n) {
+                    val bmp = LcmOnnxEngine.generate(
+                        req.prompt, req.negative_prompt, req.guidance, steps, side,
+                        seed = System.nanoTime() + i,
+                    )
+                    if (bmp == null) {
+                        LcmOnnxEngine.release()
+                        throw ModelWillNotLoadError("LCM generation failed: " + LcmOnnxEngine.lastError, -1, -1)
+                    }
+                    val baos = java.io.ByteArrayOutputStream()
+                    bmp.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, baos)
+                    images.add(android.util.Base64.encodeToString(baos.toByteArray(), android.util.Base64.NO_WRAP))
+                    bmp.recycle()
+                }
+                // Unload model after generation to free RAM (re-init on next request).
+                LcmOnnxEngine.release()
                 call.respond(
                     jsonOf(
                         "created" to System.currentTimeMillis() / 1000,
-                        "data" to List(req.n) { jsonOf("b64_json" to STUB_PNG_B64) },
+                        "data" to images.map { jsonOf("b64_json" to it) },
                         "request_id" to rid,
+                        "steps" to steps,
+                        "size" to "${side}x${side}",
+                        "requested_size" to "${w}x${h}",
                     ),
                 )
             }
             post("/v1/images/edits") {
-                // Multipart: image (binárne) + prompt, model, n, size, quality, strength, request_id.
+// Multipart: image (binary) + prompt, model, n, size, quality, strength, request_id.
                 var prompt = ""
                 var model = ""
                 var n = 1
@@ -513,6 +625,7 @@ class ApiServer(
                 var quality = "medium"
                 var requestId = ""
                 var hasImage = false
+                var imageBytes = ByteArray(0)
                 call.receiveMultipart().forEachPart { part ->
                     when (part) {
                         is PartData.FormItem -> when (part.name) {
@@ -525,7 +638,7 @@ class ApiServer(
                         }
                         is PartData.FileItem -> if (part.name == "image") {
                             hasImage = true
-                            part.provider().readBytes() // TODO(NCNN): dekódovať do pipeline
+                            imageBytes = part.provider().readBytes()
                         }
                         else -> {}
                     }
@@ -541,42 +654,97 @@ class ApiServer(
                 }
                 val rid = requestId.ifEmpty { UUID.randomUUID().toString() }
                 val steps = mobileSteps(quality, null)
-                switchTo("image", model.ifEmpty { "lcm-dreamshaper-int8" })
-                requireModelReady("lcm-dreamshaper-int8")
-                val job = JobProgress(rid, JobState.DONE, steps, steps, 100)
-                progress[rid] = job
-                @Suppress("UNUSED_VARIABLE")
-                val unused = prompt + size
-                // TODO(NCNN): img2img strength 0.1..1 clamp, Vulkan path.
+                val modelId = "lcm-dreamshaper-int8-onnx"
+                if (!downloader.isReady(modelId)) {
+                    throw ModelWillNotLoadError("model $modelId not downloaded", -1, -1)
+                }
+                val ctx = appContext ?: run {
+                    call.respond(HttpStatusCode.InternalServerError, jsonOf("error" to "no app context"))
+                    return@post
+                }
+                if (!LcmOnnxEngine.isReady()) {
+                    manager.setLoading(modelId, true)
+                    try { LcmOnnxEngine.init(ctx, downloader.modelDir(modelId)) }
+                    finally { manager.setLoading(modelId, false) }
+                }
+                val src = android.graphics.BitmapFactory.decodeByteArray(imageBytes, 0, imageBytes.size)
+                    ?: run {
+                        call.respond(HttpStatusCode.BadRequest, jsonOf("error" to "cannot decode image"))
+                        return@post
+                    }
+                val (w, h) = parseSize(size) ?: (512 to 512)
+                val out = LcmOnnxEngine.img2img(
+                    src, prompt, steps = steps, size = maxOf(w, h).coerceAtMost(512),
+                )
+                LcmOnnxEngine.release()
+                if (out == null) {
+                    throw ModelWillNotLoadError("img2img failed: " + LcmOnnxEngine.lastError, -1, -1)
+                }
+                val b64 = bitmapToB64(out)
+                out.recycle()
                 call.respond(
                     jsonOf(
                         "created" to System.currentTimeMillis() / 1000,
-                        "data" to List(n) { jsonOf("b64_json" to STUB_PNG_B64) },
+                        "data" to List(n.coerceIn(1, 4)) { jsonOf("b64_json" to b64) },
                         "request_id" to rid,
                     ),
                 )
             }
             post("/v1/images/inpaint") {
-                val req = call.receive<InpaintReq>()
+                val req = wireJson.decodeFromString<InpaintReq>(call.receiveText())
                 if (req.image.isEmpty() || req.mask.isEmpty()) {
                     call.respond(HttpStatusCode.BadRequest, jsonOf("error" to "image and mask required (base64)"))
                     return@post
                 }
                 if (maxOf(req.width, req.height) > MAX_CANVAS_PX) {
-                    // DoS guard ako server: absurd canvas → 503 will-not-load, nie hang.
+                // DoS guard like the server: absurd canvas → 503 will-not-load, not a hang.
                     throw ModelWillNotLoadError("canvas $req.width×$req.height exceeds $MAX_CANVAS_PX")
                 }
                 val rid = req.request_id.ifEmpty { UUID.randomUUID().toString() }
-                switchTo("image", req.model.ifEmpty { "lcm-dreamshaper-int8" })
-                requireModelReady("lcm-dreamshaper-int8")
-                val steps = (req.steps ?: 8).coerceIn(MOBILE_STEPS_MIN, MOBILE_STEPS_MAX)
-                val job = JobProgress(rid, JobState.DONE, steps, steps, 100)
-                progress[rid] = job
-                // TODO(NCNN): mask blur feather + inpaint pipeline.
-                call.respond(jsonOf("image" to STUB_PNG_B64, "elapsed" to 0.0, "request_id" to rid))
+                val modelId = "lcm-dreamshaper-int8-onnx"
+                if (!downloader.isReady(modelId)) {
+                    throw ModelWillNotLoadError("model $modelId not downloaded", -1, -1)
+                }
+                val ctx = appContext ?: run {
+                    call.respond(HttpStatusCode.InternalServerError, jsonOf("error" to "no app context"))
+                    return@post
+                }
+                if (!LcmOnnxEngine.isReady()) {
+                    manager.setLoading(modelId, true)
+                    try { LcmOnnxEngine.init(ctx, downloader.modelDir(modelId)) }
+                    finally { manager.setLoading(modelId, false) }
+                }
+                val src = decodeB64Image(req.image)
+                val mask = decodeB64Image(req.mask)
+                if (src == null || mask == null) {
+                    call.respond(HttpStatusCode.BadRequest, jsonOf("error" to "cannot decode image/mask"))
+                    return@post
+                }
+                val steps = (req.steps ?: 6).coerceIn(1, 8)
+                val side = maxOf(req.width, req.height).coerceIn(256, 512)
+                val colorInt = parseHexColor(req.color)
+                val t0 = System.currentTimeMillis()
+                val out = LcmOnnxEngine.inpaint(
+                    src, mask, req.prompt,
+                    negativePrompt = req.negative_prompt,
+                    guidance = req.guidance,
+                    strength = req.strength.toFloat(),
+                    steps = steps,
+                    size = side,
+                    mode = req.mode,
+                    color = colorInt,
+                )
+                LcmOnnxEngine.release()
+                if (out == null) {
+                    throw ModelWillNotLoadError("inpaint failed: " + LcmOnnxEngine.lastError, -1, -1)
+                }
+                val elapsed = (System.currentTimeMillis() - t0) / 1000.0
+                val b64 = bitmapToB64(out)
+                out.recycle()
+                call.respond(jsonOf("image" to b64, "elapsed" to elapsed, "request_id" to rid, "engine" to "onnx"))
             }
             post("/v1/images/harmonize") {
-                val req = call.receive<HarmonizeReq>()
+                val req = wireJson.decodeFromString<HarmonizeReq>(call.receiveText())
                 if (req.image.isEmpty()) {
                     call.respond(HttpStatusCode.BadRequest, jsonOf("error" to "image required (base64)"))
                     return@post
@@ -585,15 +753,34 @@ class ApiServer(
                     throw ModelWillNotLoadError("max_side ${req.max_side} exceeds $MAX_CANVAS_PX")
                 }
                 val rid = req.request_id.ifEmpty { UUID.randomUUID().toString() }
-                switchTo("image", req.model.ifEmpty { "lcm-dreamshaper-int8" })
-                requireModelReady("lcm-dreamshaper-int8")
-                val job = JobProgress(rid, JobState.DONE, 1, 1, 100)
-                progress[rid] = job
-                // TODO: color-match + seam-fix (CPU, OpenCV alebo NCNN).
-                call.respond(jsonOf("image" to STUB_PNG_B64, "elapsed" to 0.0, "request_id" to rid))
+                val src = decodeB64Image(req.image)
+                if (src == null) {
+                    call.respond(HttpStatusCode.BadRequest, jsonOf("error" to "cannot decode image"))
+                    return@post
+                }
+                val maskB64 = req.mask ?: req.body_mask ?: req.seam_mask
+                val mask = maskB64?.let { decodeB64Image(it) }
+                val t0 = System.currentTimeMillis()
+                val out = ImageOps.harmonize(
+                    src, mask,
+                    colorMatch = req.color_match,
+                    seamFix = req.seam_fix,
+                    strength = req.strength.toFloat(),
+                )
+                val elapsed = (System.currentTimeMillis() - t0) / 1000.0
+                val b64 = bitmapToB64(out)
+                out.recycle()
+                call.respond(
+                    jsonOf(
+                        "image" to b64,
+                        "elapsed" to elapsed,
+                        "request_id" to rid,
+                        "engine" to "cpu-harmonize",
+                    ),
+                )
             }
             post("/v1/images/upscale") {
-                val req = call.receive<UpscaleReq>()
+                val req = wireJson.decodeFromString<UpscaleReq>(call.receiveText())
                 if (req.image.isEmpty()) {
                     call.respond(HttpStatusCode.BadRequest, jsonOf("error" to "image required (base64)"))
                     return@post
@@ -609,16 +796,16 @@ class ApiServer(
                 call.respond(jsonOf("image" to STUB_PNG_B64, "elapsed" to 0.0, "request_id" to rid))
             }
             post("/v1/images/caption") {
-                val req = call.receive<CaptionReq>()
+                val req = wireJson.decodeFromString<CaptionReq>(call.receiveText())
                 if (req.image.isEmpty()) {
                     call.respond(HttpStatusCode.BadRequest, jsonOf("error" to "image required (base64)"))
                     return@post
                 }
-                // V2 mobile: SmolVLM build neoverený (viď ModelCatalog) → 503, nie stub text.
+// Mobile: SmolVLM runtime is not bundled yet (see ModelCatalog) → 503, not stub text.
                 throw ModelWillNotLoadError("vlm smolvlm-500m not available on device (PC :8101 /v1/images/caption works)")
             }
             post("/v1/chat/completions") {
-                // V2 mobile: vision chat ide cez PC; tvar chyby ako /v1/images/caption.
+                // V2 mobile: vision chat goes through the PC; error shape like /v1/images/caption.
                 throw ModelWillNotLoadError("vlm smolvlm-500m not available on device (PC :8101 /v1/chat/completions works)")
             }
             post("/v1/audio/transcriptions") {
@@ -633,7 +820,7 @@ class ApiServer(
     private suspend fun handleAudio(call: io.ktor.server.application.ApplicationCall, translation: Boolean) {
         var filename = ""
         var bytes = ByteArray(0)
-        var model = "whisper-small-q5_1"
+        var model = "whisper-large-v3-turbo-q5_0"
         var language = "sk"
         var autoSplit = true
         call.receiveMultipart().forEachPart { part ->
@@ -652,45 +839,75 @@ class ApiServer(
             part.dispose()
         }
         if (bytes.isEmpty()) {
-            // Prázdny / zlý súbor → 400/415, nikdy 500 (kontrakt).
+// Empty / bad file → 400/415, never 500 (contract).
             call.respond(HttpStatusCode.BadRequest, jsonOf("error" to "empty audio file"))
             return
         }
-        if (bytes.size > MAX_AUDIO_BYTES) {
-            call.respond(HttpStatusCode.BadRequest, jsonOf("error" to "file too large (max 100 MB)"))
-            return
-        }
+// No hard size limit: long files are split into chunks (auto-split).
         val ext = filename.substringAfterLast('.', "").lowercase()
         if (ext.isNotEmpty() && ext !in ALLOWED_AUDIO_EXT) {
             call.respond(HttpStatusCode.UnsupportedMediaType, jsonOf("error" to "unsupported extension .$ext"))
             return
         }
-        switchTo("audio", model) // 503 loading počas prepnutia image→audio
-        requireModelReady("whisper-small-q5_1")
+// If the requested model is not installed, use the smallest installed
+// audio model (fast) — otherwise every default request would hit 503.
+        val installedAudio = downloader.allAssets()
+            .filter { it.kind == "audio" && downloader.isReady(it.id) }
+        val effectiveModel = when {
+            downloader.isReady(model) -> model
+            installedAudio.isNotEmpty() -> installedAudio.first().id
+            else -> model
+        }
+        if (effectiveModel != model) {
+            android.util.Log.i("ApiServer", "audio: $model not installed, using $effectiveModel")
+        }
+
+switchTo("audio", effectiveModel) // 503 loading while switching image→audio
+        requireModelReady(effectiveModel)
 
         val tempDir = downloader.modelsDir()
         val pcmFloats = AudioDecoder.decodeToPcmFloats(bytes, tempDir)
-        val modelFile = downloader.getModelFile("whisper-small-q5_1")
-            ?: throw ModelWillNotLoadError("whisper-small-q5_1 model file missing", -1, -1)
+        val modelFile = downloader.getModelFile(effectiveModel)
+            ?: throw ModelWillNotLoadError("$effectiveModel model file missing", -1, -1)
 
-        val text = WhisperLib.transcribe(
-            modelFile = modelFile,
-            samples = pcmFloats,
-            language = language.ifEmpty { "sk" },
-            translate = translation,
-        )
+// Auto-split long recordings (e.g. 45 min): whisper.cpp on mobile
+// handles short segments; 30 s chunks are safe for RAM and time.
+        val chunkSize = 30 * 16000
+        val chunks = if (autoSplit || pcmFloats.size > chunkSize) {
+            (0 until pcmFloats.size step chunkSize).map { i ->
+                pcmFloats.copyOfRange(i, (i + chunkSize).coerceAtMost(pcmFloats.size))
+            }.filter { it.isNotEmpty() }
+        } else {
+            listOf(pcmFloats)
+        }
+
+        val texts = mutableListOf<String>()
+        for ((idx, chunk) in chunks.withIndex()) {
+            android.util.Log.i("ApiServer", "transcribing chunk ${idx + 1}/${chunks.size} (${chunk.size / 16000}s)")
+            val t = WhisperLib.transcribe(
+                modelFile = modelFile,
+                samples = chunk,
+                language = language.ifEmpty { "sk" },
+                translate = translation,
+            )
+            texts.add(t)
+        }
+        val text = texts.joinToString(" ").trim()
 
         call.respond(
             jsonOf(
                 "text" to text,
                 "language" to language,
+                "model" to effectiveModel,
+                "requested_model" to model,
                 "duration" to (pcmFloats.size / 16000.0),
-                "auto_split" to autoSplit,
+                "auto_split" to (chunks.size > 1),
+                "chunks" to chunks.size,
             )
         )
     }
 
-    /** Prepne rezidentný model; pri odchode z audio uvoľní whisper kontext. */
+/** Switch the resident model; release the whisper context when leaving audio. */
     private fun switchTo(kind: String, id: String): String {
         val prev = manager.status().loadedKind
         if (prev == "audio" && kind != "audio") WhisperLib.release()
@@ -703,8 +920,42 @@ class ApiServer(
         }
     }
 
+
+    private fun decodeB64Image(b64: String): android.graphics.Bitmap? {
+        return try {
+            val bytes = android.util.Base64.decode(b64, android.util.Base64.DEFAULT)
+            android.graphics.BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
+        } catch (_: Exception) {
+            null
+        }
+    }
+
+    private fun bitmapToB64(bmp: android.graphics.Bitmap): String {
+        val baos = java.io.ByteArrayOutputStream()
+        bmp.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, baos)
+        return android.util.Base64.encodeToString(baos.toByteArray(), android.util.Base64.NO_WRAP)
+    }
+
+    private fun parseHexColor(hex: String): Int {
+        return try {
+            val h = hex.trim().removePrefix("#")
+            when (h.length) {
+                6 -> (0xFF000000.toInt()) or h.toLong(16).toInt()
+                3 -> {
+                    val r = h[0].toString() + h[0]
+                    val g = h[1].toString() + h[1]
+                    val b = h[2].toString() + h[2]
+                    (0xFF000000.toInt()) or (r + g + b).toLong(16).toInt()
+                }
+                else -> 0xFF0066FF.toInt()
+            }
+        } catch (_: Exception) {
+            0xFF0066FF.toInt()
+        }
+    }
+
     companion object {
-        /** 1×1 PNG stub, kým nie je zapojená NCNN inferencia. */
+/** 1×1 PNG stub until the ONNX engine is wired. */
         const val STUB_PNG_B64 =
             "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=="
 

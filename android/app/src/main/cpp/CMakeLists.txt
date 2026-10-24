@@ -1,14 +1,14 @@
-# Náš JNI most (whisper_jni.cpp) + whisper.cpp ako knižnica.
+# Our JNI bridge (whisper_jni.cpp) + whisper.cpp as a library.
 #
-# DÔLEŽITÉ: whisper.cpp sa v tomto builde zostavuje ako SHARED (BUILD_SHARED_LIBS
-# zapnuté AGP), takže jeho vlastný výstup je libwhisper.so. Náš JNI most preto
-# MUSÍ mať iný názov (libwhisper_jni.so), inak si navzájom prepíšu výstup a
-# Java_native symboly zmiznú.
+# IMPORTANT: in this build whisper.cpp is compiled as SHARED (BUILD_SHARED_LIBS
+# is enabled by AGP), so its own output is libwhisper.so. Our JNI bridge must
+# therefore use a different name (libwhisper_jni.so); otherwise the two
+# overwrite each other's output and the Java_native symbols disappear.
 cmake_minimum_required(VERSION 3.22.1)
 project("odysseus-whisper")
 
-# AGP Debug variant posiela -O0, čo robí whisper.cpp ~50x pomalším
-# (5 s audio = 4 min). Vynútime optimalizácie aj v Debug builde.
+# The AGP Debug variant passes -O0, which makes whisper.cpp ~50x slower
+# (5 s of audio = 4 min). Force optimizations in the Debug build too.
 set(CMAKE_C_FLAGS_DEBUG "${CMAKE_C_FLAGS_DEBUG} -O3")
 set(CMAKE_CXX_FLAGS_DEBUG "${CMAKE_CXX_FLAGS_DEBUG} -O3")
 if(NOT CMAKE_BUILD_TYPE OR CMAKE_BUILD_TYPE STREQUAL "Debug")
@@ -16,7 +16,7 @@ if(NOT CMAKE_BUILD_TYPE OR CMAKE_BUILD_TYPE STREQUAL "Debug")
     set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -O3")
 endif()
 
-# Len jadro: žiadne testy, examples, server, curl ani SDL.
+# Core only: no tests, examples, server, curl or SDL.
 set(WHISPER_BUILD_TESTS OFF CACHE BOOL "" FORCE)
 set(WHISPER_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
 set(WHISPER_BUILD_SERVER OFF CACHE BOOL "" FORCE)

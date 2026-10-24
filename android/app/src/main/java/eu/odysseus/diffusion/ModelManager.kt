@@ -4,12 +4,12 @@ import java.util.concurrent.locks.ReentrantLock
 import kotlin.concurrent.withLock
 
 /**
- * Single-resident gate — zrkadlo `unified/model_manager.py`.
+ * Single-resident gate — mirrors `unified/model_manager.py`.
  *
- * Na mobile je budget ~3–4 GB (SD INT8 ~2.5 GB + Whisper small ~350 MB +
- * Real-ESRGAN ~150 MB sa NIKDY nedržia naraz). Prepnutie kind/id =
- * unload + load. Počas loadu volajúci dostane [ModelLoadingError]
- * (HTTP 503 `loading model`, retry_after 30), nikdy corrupt výstup.
+ * Mobile budget is ~3–4 GB (SD INT8 ~2.5 GB + Whisper small ~350 MB +
+* Real-ESRGAN ~150 MB are NEVER held at once). Switch kind/id =
+* unload + load. During load the caller gets [ModelLoadingError]
+* (HTTP 503 `loading model`, retry_after 30), never corrupt output.
  */
 class ModelLoadingError(
     val loadingModel: String,
@@ -29,6 +29,7 @@ data class ManagerStatus(
     val loadingModel: String,
     val busy: Boolean,
     val queue: Int,
+    val active: Int,
 )
 
 class ModelManager {
@@ -39,6 +40,7 @@ class ModelManager {
     private var loadingModel = ""
     private var busy = false
     private var queue = 0
+    private var active = 0
     var loadCount = 0
         private set
 
@@ -48,13 +50,13 @@ class ModelManager {
     }
 
     /**
-     * Zaistí rezidentný model. Vráti efektívne id.
-     * @throws ModelLoadingError počas cold loadu (→ 503 loading)
+* Ensure a resident model. Returns the effective id.
+* @throws ModelLoadingError during cold load (→ 503 loading)
      */
     fun ensure(kind: String, modelId: String): String = lock.withLock {
         if (loading) throw ModelLoadingError(loadingModel.ifEmpty { modelId })
         if (loadedKind == kind && loadedId == modelId) return modelId
-        // Prepnutie = najprv unload predchádzajúceho (uvoľní ~GB RAM).
+// Switch = unload the previous one first (frees ~GB of RAM).
         if (loadedKind != null) doUnloadLocked("switch")
         loadedKind = kind
         loadedId = modelId
@@ -70,10 +72,22 @@ class ModelManager {
         val had = loadedKind != null
         loadedKind = null
         loadedId = null
-        // JVM: hint GC; natívne NCNN/whisper handlery uvoľňuje volajúci
-        // cez InferenceHandle.close() pred unload() — viď ApiServer.
-        System.gc()
+// Native handles are released by the caller (WhisperLib/LcmOnnxEngine)
+        // before this call; no System.gc() here (it can stall the Netty loop).
         return had
+    }
+
+    /** Called for every tracked image/audio request (Ktor intercept). */
+    fun beginRequest() = lock.withLock {
+        active++
+        busy = true
+        queue = (active - 1).coerceAtLeast(0)
+    }
+
+    fun endRequest() = lock.withLock {
+        active = (active - 1).coerceAtLeast(0)
+        busy = active > 0
+        queue = (active - 1).coerceAtLeast(0)
     }
 
     fun markBusy(active: Boolean, queuedDelta: Int = 0) = lock.withLock {
@@ -89,6 +103,7 @@ class ModelManager {
             loadingModel = loadingModel,
             busy = busy,
             queue = queue,
+            active = active,
         )
     }
 }

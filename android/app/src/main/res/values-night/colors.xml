@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="prism_bg">#0F1114</color>
+    <color name="prism_panel">#1D2127</color>
+    <color name="prism_panel2">#262B33</color>
+    <color name="prism_text">#E8EAF0</color>
+    <color name="prism_muted">#7D8590</color>
+    <color name="prism_border">#30363D</color>
+    <color name="prism_accent">#58A6FF</color>
+    <color name="prism_green">#238636</color>
+    <color name="prism_red">#DA3633</color>
+    <color name="prism_white">#FFFFFF</color>
+</resources>
