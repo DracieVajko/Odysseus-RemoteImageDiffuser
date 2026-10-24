@@ -61,30 +61,39 @@ def _to_pil(arr: np.ndarray) -> Image.Image:
 
 
 class LcmOnnxNumpy:
-    def __init__(self, model_dir: Path):
+    def __init__(self, model_dir: Path, use_gpu: bool | None = None):
         import os
         import onnxruntime as ort
+        from unified.onnx_env import pick_providers
         self.dir = Path(model_dir)
         self._vocab = None
         self._rank = None
         self._load_tokenizer()
         self._build_scheduler()
-        # Prefer GPU (CUDA/DirectML) with CPU fallback; ORT assigns supported
-        # nodes to the GPU and the rest to the CPU automatically.
-        avail = []
-        try:
-            avail = ort.get_available_providers()
-        except Exception:
-            pass
-        if "CUDAExecutionProvider" in avail:
-            provs = ["CUDAExecutionProvider", "CPUExecutionProvider"]
-        elif "DmlExecutionProvider" in avail:
-            provs = ["DmlExecutionProvider", "CPUExecutionProvider"]
+        # Provider selection:
+        #   None  -> auto (CUDA if available, DML skipped for QDQ, else CPU)
+        #   True  -> force CUDA when available
+        #   False -> force CPU
+        if use_gpu is None:
+            provs = pick_providers("qdq")
+        elif use_gpu:
+            avail = []
+            try:
+                avail = ort.get_available_providers()
+            except Exception:
+                pass
+            provs = (["CUDAExecutionProvider", "CPUExecutionProvider"]
+                     if "CUDAExecutionProvider" in avail else ["CPUExecutionProvider"])
         else:
             provs = ["CPUExecutionProvider"]
         logger.info("ONNX providers: %s", provs)
         so = ort.SessionOptions()
         so.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_BASIC
+        if provs != ["CPUExecutionProvider"]:
+            # Without this, ORT pre-allocates a memory pattern per input shape;
+            # on a 6 GB card mixed 256/384/512 requests then spill to shared
+            # memory (measured 213 s for one 384 request vs 17 s with it off).
+            so.enable_mem_pattern = False
         if provs == ["CPUExecutionProvider"]:
             try:
                 so.intra_op_num_threads = max(1, (os.cpu_count() or 4) - 1)
@@ -364,6 +373,19 @@ def _pipeline(model_dir: Path) -> LcmOnnxNumpy:
     if _PIPELINE is None:
         _PIPELINE = LcmOnnxNumpy(model_dir)
     return _PIPELINE
+
+
+def release_pipeline() -> bool:
+    """Drop the cached pipeline so the GPU/CPU memory is actually freed."""
+    global _PIPELINE
+    had = _PIPELINE is not None
+    _PIPELINE = None
+    try:
+        import gc
+        gc.collect()
+    except Exception:
+        pass
+    return had
 
 
 def generate_b64(model_dir: Path, prompt: str, negative_prompt: str = "", guidance: float = 1.0,

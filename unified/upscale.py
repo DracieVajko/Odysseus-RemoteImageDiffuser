@@ -1,16 +1,21 @@
-"""Upscale — Real-ESRGAN-x4v3 (RRDBNet) when weights + torch exist, else Pillow LANCZOS.
+"""Upscale — Real-ESRGAN-x4v3 (RRDBNet) when weights + torch exist,
+else Real-ESRGAN ONNX when available, else Pillow LANCZOS.
 
 Weights: models/RealESRGAN_x4v3/RealESRGAN_x4plus.pth (BSD-3-Clause, 67 MB,
-`download_models.py --preset upscale`). Tiled inference (tile 256,
-overlap 16) keeps VRAM low — same pattern as NCNN tiles on mobile.
+`download_models.py --preset upscale`). ONNX: models/RealESRGAN_x4v3/RealESRGAN_x4plus.onnx.
+Tiled inference (tile 256, overlap 16) keeps VRAM low — same pattern as NCNN tiles on mobile.
 DoS cap 8192px per side. scale 2/3: ESRGAN is x4 → the result is downsampled.
 """
 import base64
 import io
+import logging
 import time
 from pathlib import Path
+from typing import Optional
 
 from PIL import Image
+
+logger = logging.getLogger("unified.upscale")
 
 MAX_SIDE = 8192
 WEIGHT_NAMES = ("RealESRGAN_x4plus.pth", "RealESRGAN_x4plus.pt",
@@ -30,6 +35,15 @@ def find_weight(dirs=None):
             p = d / name
             if p.is_file() and p.stat().st_size > 10 * 1024 * 1024:
                 return p
+    return None
+
+
+def find_onnx_weight(dirs=None):
+    for d in (dirs if dirs is not None else _DEFAULT_DIRS):
+        d = Path(d)
+        p = d / "RealESRGAN_x4plus.onnx"
+        if p.is_file() and p.stat().st_size > 10 * 1024 * 1024:
+            return p
     return None
 
 
@@ -114,7 +128,28 @@ def _load_net(weight: Path, device: str):
     return net
 
 
+_onnx_session = {}
+
+
+def _load_onnx_session(weight: Path):
+    """Load or reuse an ONNX Runtime session for Real-ESRGAN."""
+    import onnxruntime as ort
+    from unified.onnx_env import pick_providers
+    key = str(weight)
+    sess = _onnx_session.get(key)
+    if sess is None:
+        provs = pick_providers("generic")
+        so = ort.SessionOptions()
+        so.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_BASIC
+        if provs != ["CPUExecutionProvider"]:
+            so.enable_mem_pattern = False
+        sess = ort.InferenceSession(str(weight), sess_options=so, providers=provs)
+        _onnx_session[key] = sess
+    return sess
+
+
 def _esrgan_upscale(img: Image.Image, weight: Path) -> Image.Image:
+    """Torch-based tiled inference (x4)."""
     import torch
     device = "cuda" if torch.cuda.is_available() else "cpu"
     net = _load_net(weight, device)
@@ -143,6 +178,34 @@ def _esrgan_upscale(img: Image.Image, weight: Path) -> Image.Image:
     return out
 
 
+def _esrgan_onnx_upscale(img: Image.Image, weight: Path) -> Image.Image:
+    """ONNX-based tiled inference (x4)."""
+    import numpy as np
+    sess = _load_onnx_session(weight)
+    input_name = sess.get_inputs()[0].name
+    output_name = sess.get_outputs()[0].name
+    w, h = img.size
+    tile, overlap = 256, 16
+    out = Image.new("RGB", (w * 4, h * 4))
+    for y in range(0, h, tile - overlap):
+        for x in range(0, w, tile - overlap):
+            x1, y1 = max(x - overlap, 0), max(y - overlap, 0)
+            x2, y2 = min(x + tile + overlap, w), min(y + tile + overlap, h)
+            crop = img.crop((x1, y1, x2, y2))
+            t = np.asarray(crop).astype(np.float32) / 255.0
+            t = np.transpose(t, (2, 0, 1))[None, ...]  # NCHW
+            sr = sess.run([output_name], {input_name: t})[0][0]
+            sr = np.clip(sr, 0, 1)
+            sr = np.transpose(sr, (1, 2, 0))
+            sr = (sr * 255.0 + 0.5).astype(np.uint8)
+            sr_img = Image.fromarray(sr)
+            ox1, oy1 = (x - x1) * 4, (y - y1) * 4
+            cw = (min(x + tile - overlap, w) - x) * 4
+            ch = (min(y + tile - overlap, h) - y) * 4
+            out.paste(sr_img.crop((ox1, oy1, ox1 + cw, oy1 + ch)), (x * 4, y * 4))
+    return out
+
+
 def upscale_image_b64(image_b64: str, scale: int = 2, model: str = "RealESRGAN_x4v3") -> dict:
     if scale not in (2, 3, 4):
         raise ValueError(f"scale must be 2/3/4, got {scale}")
@@ -160,16 +223,32 @@ def upscale_image_b64(image_b64: str, scale: int = 2, model: str = "RealESRGAN_x
         raise ValueError(f"upscaled {nw}x{nh} exceeds cap {MAX_SIDE}px")
     t0 = time.time()
     engine = "pillow"
-    weight = find_weight() if model == "RealESRGAN_x4v3" else None
-    if weight is not None:
+    weight_torch = find_weight() if model == "RealESRGAN_x4v3" else None
+    weight_onnx = find_onnx_weight() if model == "RealESRGAN_x4v3" else None
+    if weight_torch is not None:
         try:
-            sr = _esrgan_upscale(img, weight)
-            engine = "realesrgan"
+            sr = _esrgan_upscale(img, weight_torch)
+            engine = "realesrgan-torch"
             out = sr if scale == 4 else sr.resize((nw, nh), Image.LANCZOS)
         except Exception as e:
-            import logging
-            logging.getLogger("unified.upscale").warning(
-                "realesrgan failed (%s), pillow fallback", str(e)[:140])
+            logger.warning("realesrgan torch failed (%s), trying ONNX", str(e)[:140])
+            if weight_onnx is not None:
+                try:
+                    sr = _esrgan_onnx_upscale(img, weight_onnx)
+                    engine = "realesrgan-onnx"
+                    out = sr if scale == 4 else sr.resize((nw, nh), Image.LANCZOS)
+                except Exception as e2:
+                    logger.warning("realesrgan onnx failed (%s), pillow fallback", str(e2)[:140])
+                    out = img.resize((nw, nh), Image.LANCZOS)
+            else:
+                out = img.resize((nw, nh), Image.LANCZOS)
+    elif weight_onnx is not None:
+        try:
+            sr = _esrgan_onnx_upscale(img, weight_onnx)
+            engine = "realesrgan-onnx"
+            out = sr if scale == 4 else sr.resize((nw, nh), Image.LANCZOS)
+        except Exception as e:
+            logger.warning("realesrgan onnx failed (%s), pillow fallback", str(e)[:140])
             out = img.resize((nw, nh), Image.LANCZOS)
     else:
         out = img.resize((nw, nh), Image.LANCZOS)

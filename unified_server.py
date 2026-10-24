@@ -62,6 +62,11 @@ def _release_engines(reason: str = ""):
     except Exception:
         pass
     try:
+        from unified.lcm_onnx_numpy import release_pipeline
+        release_pipeline()
+    except Exception:
+        pass
+    try:
         release_vlm()
     except Exception:
         pass
@@ -153,7 +158,24 @@ def _device():
             return "cuda"
     except Exception:
         pass
+    try:
+        from unified.onnx_env import available_providers
+        provs = available_providers()
+        if "CUDAExecutionProvider" in provs:
+            return "cuda"
+        if "DmlExecutionProvider" in provs:
+            return "directml"
+    except Exception:
+        pass
     return "cpu"
+
+
+def _onnx_provider_label():
+    try:
+        from unified.onnx_env import available_providers, provider_label, pick_providers
+        return provider_label(pick_providers("qdq"))
+    except Exception:
+        return "unknown"
 
 
 def _image_registry():
@@ -289,6 +311,7 @@ def health():
         "model": reg.get("default_image_model", ""),
         "current_model": actual_model or st["loaded_id"],
         "device": _device(),
+        "onnx_provider": _onnx_provider_label(),
         "available_models": sorted(list(reg.get("image_models", {}).keys())),
         "loading": st["loading"],
         "loading_model": st["loading_model"],

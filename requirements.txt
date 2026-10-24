@@ -63,4 +63,5 @@ zipp==4.1.0
 # --- optional (not in the base requirements) ---
 # pip install yt-dlp            # URL input for /v1/audio/transcriptions (YouTube/direct links)
 # pip install faster-whisper    # local STT without the WhisperApi service (needs CTranslate2 CUDA DLLs on Windows)
-# pip install onnxruntime-gpu  # Real-ESRGAN ONNX path (Pillow fallback for now)
+# pip install onnxruntime-gpu  # NVIDIA CUDA EP (also: pip install nvidia-cudnn-cu13)
+# pip install onnxruntime-directml  # AMD/DirectML EP (non-QDQ models only)
