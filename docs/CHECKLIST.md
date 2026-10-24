@@ -37,13 +37,11 @@ Status legend: [x] done, [~] in progress, [ ] todo, [!] experimental/blocked.
 
 ## On-device features
 
-- [x] Transcribe / Translate — whisper.cpp JNI.
-- [x] Generate (txt2img) — LCM QDQ ONNX (256/512 px).
-- [ ] Edits (img2img) — plan in docs/ONDEVICE-PLAN.md §1.
-- [ ] Inpaint — plan §2.
-- [ ] Harmonize — plan §3 (CPU).
-- [ ] Upscale — plan §4 (ONNX or CPU fallback).
-- [ ] Caption / Chat — plan §5 (SmolVLM ONNX).
+- [x] Edits (img2img) — ONNX LCM VAE encoder, wired in `ApiServer`.
+- [x] Inpaint — add/remove/color modes, ONNX LCM, wired in `ApiServer`.
+- [x] Harmonize — CPU fallback in `ImageOps.kt`, wired in `ApiServer`.
+- [ ] Upscale — NCNN Vulkan engine skeleton (`RealEsrganNcnnEngine.kt`), JNI placeholder; 503 until `librealesrgan_jni.so` built.
+- [ ] Caption / Chat — llama.cpp (mtmd) engine skeleton (`SmolVlmEngine.kt`), JNI placeholder; 503 until `libsmolvlm_jni.so` built.
 - [ ] FFmpeg — plan §6 (bundled binary).
 
 ## Android endpoints
@@ -52,12 +50,12 @@ Status legend: [x] done, [~] in progress, [ ] todo, [!] experimental/blocked.
 - [x] POST /v1/models/install, /uninstall, /cancel, /add, /delete
 - [x] GET /v1/models/progress/{id}
 - [x] POST /v1/images/generations (local ONNX) — **200**
-- [ ] POST /v1/images/edits — 503 until img2img lands
-- [ ] POST /v1/images/inpaint — 503 until inpaint lands
-- [ ] POST /v1/images/harmonize — 503 until CPU harmonize lands
-- [ ] POST /v1/images/upscale — 503 until upscale lands
-- [ ] POST /v1/images/caption — 503 until VLM lands
-- [ ] POST /v1/chat/completions — 503 until VLM lands
+- [x] POST /v1/images/edits (img2img) — ONNX LCM, **200**
+- [x] POST /v1/images/inpaint (add/remove/color) — ONNX LCM, **200**
+- [x] POST /v1/images/harmonize — CPU, **200**
+- [ ] POST /v1/images/upscale — NCNN skeleton wired, JNI placeholder, **503**
+- [ ] POST /v1/images/caption — llama.cpp skeleton wired, JNI placeholder, **503**
+- [ ] POST /v1/chat/completions — llama.cpp skeleton wired, JNI placeholder, **503**
 - [x] POST /v1/audio/transcriptions, /translations — local whisper.cpp
 - [ ] GET /v1/ffmpeg/presets / POST /v1/ffmpeg/{op} — 503 until ffmpeg lands
 - [x] GET /v1/settings
@@ -302,3 +300,16 @@ Test files: `test_pc_states.py` (PASS) and `test_android_states.py`
 - Responses report `size` (actual) and `requested_size` (as asked).
 - Verified: `320x256` → `size=320x320`, `requested_size=320x256` (PC);
   `256x128` → `size=256x256`, `requested_size=256x128` (Android).
+
+## GPU (PC, 2026-10-24)
+
+- [x] `onnxruntime-gpu 1.31.0` + `nvidia-cudnn-cu13` installed.
+- [x] `unified/onnx_env.py`: DLL registration + provider selection
+      (`auto` → CUDA → CPU; DML skipped for QDQ).
+- [x] `/health` reports `device` and `onnx_provider`.
+- [x] `release_pipeline()` frees ONNX sessions on idle/model switch.
+- [x] Measured (warm): 256/4 6.3 s, 384/6 10.7 s, 512/6 51.8 s (CPU: 23/45/65 s).
+- [x] First run of a new shape pays cuDNN planning (43/65/184 s, one-time).
+- [x] `PRISM_ONNX_PROVIDER=cpu` documented as the fallback for the 6 GB card.
+- [ ] AMD iGPU: DirectML cannot run the INT8 QDQ graph → CPU only; needs a
+      non-QDQ FP16/FP32 model in a separate `onnxruntime-directml` env.

@@ -32,6 +32,23 @@ Env: `UNIFIED_WHISPER_URL` (default `http://127.0.0.1:4444`),
   `pip install faster-whisper` into `.venv` for the local engine.
 - VLM: `download_models.py --preset vlm` (SmolVLM-500M, ~1 GB).
 
+### GPU (NVIDIA CUDA / AMD DirectML)
+
+```powershell
+pip install onnxruntime-gpu nvidia-cudnn-cu13   # NVIDIA (CUDA 13 + cuDNN 9)
+# or, in a separate env, for AMD:
+pip install onnxruntime-directml
+```
+
+- `PRISM_ONNX_PROVIDER=auto|cuda|dml|cpu` (default `auto`).
+- `auto` prefers CUDA; DirectML is skipped for the INT8 QDQ LCM model because
+  DML cannot fuse that graph.
+- `/health` shows `device` and `onnx_provider`.
+- The 6 GB RTX 3060 runs at ~5.9 GB VRAM; use `PRISM_ONNX_PROVIDER=cpu` if
+  other GPU apps need memory.
+- AMD: the current INT8 QDQ asset runs on CPU only; DirectML needs a
+  non-QDQ (FP16/FP32) ONNX model.
+
 ### Install / uninstall from WebUI and CLI
 
 WebUI → **Models** tab: model list, installed/not installed status,

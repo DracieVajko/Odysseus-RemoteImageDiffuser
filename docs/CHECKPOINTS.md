@@ -304,30 +304,91 @@ concurrently against the running app.
   superseded); `test_pc_features.py` and `test_android_features.py` now write
   sample outputs to a temp directory instead of the repo root.
 
+## 2026-10-24 — PC upscale ONNX fallback, Android NCNN/VLM skeletons
+
+**PC upscale:** `unified/upscale.py` now tries Real-ESRGAN in this order:
+torch (RRDBNet) → ONNX (`RealESRGAN_x4plus.onnx`) → Pillow LANCZOS.
+Tiled inference (256×256, overlap 16) keeps VRAM low. Scale 2/3 downsample from
+native x4. DoS cap 8192px. Verified import, no model weights present → Pillow fallback.
+
+**Android upscale skeleton:** Added `RealEsrganNcnnEngine.kt` (NCNN Vulkan),
+wired in `ApiServer.kt` POST `/v1/images/upscale`.
+- Downloads `realesrgan-ncnn-vulkan` ZIP (param + bin) from GitHub.
+- JNI bridge `librealesrgan_jni.so` placeholder (requires NDK build with NCNN).
+- Returns 503 until native lib is built and bundled.
+
+**Android VLM skeleton:** Added `SmolVlmEngine.kt` (llama.cpp mtmd),
+wired in `ApiServer.kt` POST `/v1/images/caption` + `/v1/chat/completions`.
+- Downloads GGUF model + mmproj from Hugging Face.
+- JNI bridge `libsmolvlm_jni.so` placeholder (requires NDK build with mtmd).
+- Returns 503 until native lib is built and bundled.
+
+**Android API updates:**
+- `switchTo()` releases NCNN/VLM engines when switching away.
+- `appContext` used for engine init (fixes build error).
+- Removed `companion object` from engine objects (not allowed in `object`).
+
+**Checklist updated:** Upscale/VLM entries show skeleton wired, JNI placeholder.
+
+**Build:** Android `assembleDebug` PASS. PC `pytest tests -q` 44 passed.
+
 ## 2026-10-23 — Size rule, language sweep, ffmpeg pass log
 
-- **Size rule unified:** PC now uses the larger requested side
-  (`max(w, h)`, clamped to 256–512) like Android, in all four places
-  (`_try_real_generation`, generations metadata, edits, inpaint).
-  Verified: `320x256` → `size=320x320`, `requested_size=320x256`.
+- **Size rule unified:** PC uses the larger requested side (`max(w, h)`,
+  clamped to 256–512) like Android, in `_try_real_generation`, generations
+  metadata, edits and inpaint. Verified: `320x256` → `size=320x320`,
+  `requested_size=320x256`.
 - `test_pc_features.py` regression section: `n=2` → 2 distinct images,
   `quality=high` → `steps=8`, size metadata. Full suite **29/29 passed**;
   `test_ffmpeg_presets.py` **23/23 passed**.
-- **Language sweep corrected the earlier claim.** The previous "0 Slovak"
-  check only looked at diacritics in Kotlin, so these were still Slovak:
-  `AndroidManifest.xml`, `cpp/CMakeLists.txt`, `cpp/whisper_jni.cpp`,
-  `build.gradle.kts`, `ModelCatalog.kt`, `ModelDownloader.kt`, WebUI,
-  `requirements.txt`, `ffmpeg_tools.py`, `lcm_onnx.py`, `tests/*` docstrings,
-  the Android `.ps1` scripts, `monitor_android.ps1`,
-  `Switch-Service-ToUnified.ps1` and the archived plan. All translated.
-  Re-scan (diacritics + Slovak stop words, excluding `values-sk/cs/de`):
-  **0 hits**.
-- **ffmpeg two-pass log leak fixed:** `compress_video` passes
-  `-passlogfile` next to the temporary output and uses `os.devnull`, so
-  `ffmpeg2pass-0.log` no longer lands in the server working directory.
-  Verified by deleting the old log and re-running `/v1/ffmpeg/compress`: no
-  file reappeared.
-- `requirements.txt` optional-dependency comments translated.
+- **Language sweep:** the earlier "0 Slovak" check only looked at diacritics
+  in Kotlin. `AndroidManifest.xml`, `cpp/CMakeLists.txt`,
+  `cpp/whisper_jni.cpp`, `build.gradle.kts`, `ModelCatalog.kt`,
+  `ModelDownloader.kt`, WebUI, `requirements.txt`, `ffmpeg_tools.py`,
+  `lcm_onnx.py`, `tests/*` docstrings, the Android `.ps1` scripts,
+  `monitor_android.ps1`, `Switch-Service-ToUnified.ps1` and the archived plan
+  were still Slovak; all translated. Re-scan: **0 hits**.
+- **ffmpeg two-pass log leak fixed:** `-passlogfile` points next to the
+  temporary output and `os.devnull` is used; `ffmpeg2pass-0.log` no longer
+  lands in the server working directory (re-verified after deletion).
 - `python -m pytest tests -q`: **44 passed**; Android `assembleDebug`:
-  **BUILD SUCCESSFUL** (after the comment/string edits).
+  **BUILD SUCCESSFUL**.
+
+## 2026-10-24 — GPU (CUDA) on PC
+
+Hardware: RTX 3060 Laptop 6 GB, driver 617.42, CUDA 13.4, cuDNN 9.27
+(`nvidia-cudnn-cu13` pip), `onnxruntime-gpu 1.31.0`.
+
+Provider logic (`unified/onnx_env.py`):
+- `PRISM_ONNX_PROVIDER=auto` (default): CUDA → CPU. DirectML is skipped for
+  `qdq` models because DML fails in `DmlGraphFusionHelper` on the INT8 graph.
+- `cuda` / `dml` / `cpu` force a path.
+- Windows: the pip `nvidia/*/bin` DLL directories are registered before the
+  first session (`register_nvidia_dlls`).
+- CUDA options: `cudnn_conv_algo_search=HEURISTIC`,
+  `cudnn_conv_use_max_workspace=0`, `arena_extend_strategy=kSameAsRequested`,
+  and `enable_mem_pattern=False` for GPU sessions.
+
+Measured on the server (warm, LCM-Dreamshaper INT8):
+
+| Request | CPU | CUDA |
+|---|---|---|
+| 256×256 / 4 steps | ~23 s | **6.3 s** |
+| 384×384 / 6 steps | ~45 s | **10.7 s** |
+| 512×512 / 6 steps | ~65 s | **51.8 s** |
+
+Caveats (measured):
+- The first run of each new shape pays cuDNN planning: 256 ≈ 43 s, 384 ≈ 65 s,
+  512 ≈ 184 s (one-time per process; the first also includes engine init).
+- VRAM sits at ~5.9 GB of 6 GB. `PRISM_ONNX_PROVIDER=cpu` is the safe fallback.
+- ORT reports 777 Memcpy nodes for CUDA on this QDQ graph ("unable to run CUDA
+  graph"), so the gain is modest at 512.
+- `release_pipeline()` frees the ONNX sessions on idle/model switch, so the GPU
+  is not held forever.
+
+AMD: the machine also has a Radeon iGPU. DirectML cannot execute this QDQ
+graph (`The parameter is incorrect` in DmlGraphFusionHelper) and the iGPU
+shares system memory. AMD support therefore needs `onnxruntime-directml` in a
+separate env with a non-QDQ (FP16/FP32) model; with the current INT8 asset it
+stays on CPU.
 
