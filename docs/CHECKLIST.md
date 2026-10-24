@@ -107,11 +107,13 @@ Status legend: [x] done, [~] in progress, [ ] todo, [!] experimental/blocked.
 - [x] `testdata/video/test_5s.mp4`
 - [x] `testdata/prompts.txt`
 
-### PC test result (2026-10-23)
+### PC test result (2026-10-24, CUDA)
 
-`test_pc_features.py`: **20/20 passed** — health/models/catalog/settings,
+`test_pc_features.py`: **31/31 passed** — health/models/catalog/settings,
 txt2img (negative + guidance), custom size, img2img, inpaint add/remove/color,
-convert-image/audio/video, extract-audio, trim, info, compress, transcription.
+convert-image/audio/video, extract-audio, trim, info, compress, transcription,
+translation. GPU (RTX 3060) warm timings: 256/4 3–6 s, 384/6 ~9–11 s,
+512/6 ~52 s.
 
 `test_ffmpeg_presets.py`: **23/23 passed** — all 10 video, 8 audio and 5 image
 presets.

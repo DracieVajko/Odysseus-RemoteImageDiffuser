@@ -385,6 +385,12 @@ Caveats (measured):
   graph"), so the gain is modest at 512.
 - `release_pipeline()` frees the ONNX sessions on idle/model switch, so the GPU
   is not held forever.
+- Found and fixed `/v1/audio/translations` 500: it called `transcriptions()`
+  without `url`, so the default was a FastAPI `Form` marker. The suite now
+  covers translations (**31/31 passed**).
+- GPU output validity: 256/384/512 PNG dimensions OK; inpaint mask polarity
+  black 0.0 / white 86.1 / gray 35.1; img2img 256×256. Peak GPU utilisation
+  53% during a 512 request (VRAM 5.7 GB), state returns to idle afterwards.
 
 AMD: the machine also has a Radeon iGPU. DirectML cannot execute this QDQ
 graph (`The parameter is incorrect` in DmlGraphFusionHelper) and the iGPU

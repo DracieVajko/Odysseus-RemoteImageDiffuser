@@ -802,7 +802,9 @@ async def translations(
     audio: UploadFile = File(default=None),
     model: str = Form(default="whisper-1"),
 ):
-    r = await transcriptions(file=file, audio=audio, model=model)
+    r = await transcriptions(file=file, audio=audio, url="", model=model,
+                             model_name=model, device="", language=None,
+                             response_format="json", auto_split="true")
     if isinstance(r, dict) and "text" in r:
         return {"text": r["text"]}
     return r

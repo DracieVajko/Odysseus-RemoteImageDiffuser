@@ -144,6 +144,10 @@ print("\n=== AUDIO ===")
 check("transcribe wav", "POST", "/v1/audio/transcriptions",
       files={"file": ("jfk.wav", (TD / "audio" / "jfk.wav").read_bytes(), "audio/wav")},
       data={"language": "en"})
+r = check("translate wav", "POST", "/v1/audio/translations",
+          files={"file": ("jfk.wav", (TD / "audio" / "jfk.wav").read_bytes(), "audio/wav")})
+if r is not None and r.status_code == 200:
+    expect("  translation has text", bool(r.json().get("text")), r.json().get("text", "")[:40])
 
 print("\n=== SUMMARY ===")
 ok = sum(1 for _, _, o, _, _ in results if o)
