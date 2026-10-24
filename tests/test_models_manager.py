@@ -1,4 +1,4 @@
-"""Model manager (PC): katalóg, installed detekcia, uninstall guard."""
+"""Model manager (PC): catalog, installed detection, uninstall guard."""
 import pytest
 from pathlib import Path
 
@@ -34,7 +34,7 @@ def test_uninstall_refuses_unknown_id():
 
 
 def test_uninstall_refuses_outside_models_dir(tmp_path, monkeypatch):
-    # task s target obsahujúcim .. nesmie zmazať nič mimo MODELS_DIR
+    # a task whose target contains .. must not delete anything outside MODELS_DIR
     monkeypatch.setattr(mm, "MODELS_DIR", tmp_path / "models")
     (tmp_path / "models").mkdir()
     victim = tmp_path / "victim"

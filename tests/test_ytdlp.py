@@ -1,4 +1,4 @@
-"""yt-dlp wrapper — 400 pri zlom URL, 503 bez yt-dlp, 200 pri úspechu."""
+"""yt-dlp wrapper — 400 on a bad URL, 503 without yt-dlp, 200 on success."""
 import pytest
 from unified.ytdlp import download_audio, YtDlpMissing, DownloadFailed
 

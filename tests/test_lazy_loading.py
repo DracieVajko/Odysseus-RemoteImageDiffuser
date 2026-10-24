@@ -1,4 +1,4 @@
-"""Lazy-loading: ModelManager idle unload + prepínanie engine-ov."""
+"""Lazy loading: ModelManager idle unload + engine switching."""
 import time
 
 from unified.model_manager import ModelManager

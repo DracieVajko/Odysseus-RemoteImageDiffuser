@@ -1,4 +1,4 @@
-"""Idle unload decision: nesmie unloadnúť počas requestu ani pod limitom."""
+"""Idle unload decision: must not unload during a request or below the limit."""
 import time
 
 from unified.model_manager import ModelManager
@@ -30,7 +30,7 @@ def test_in_flight_blocks_unload_even_when_old():
     mm.begin()
     assert should_idle_unload(mm, 20) is False
     mm.end()
-    # end() reštartuje idle countdown -> ešte nie je čas
+    # end() restarts the idle countdown -> not time yet
     assert should_idle_unload(mm, 20) is False
     mm.last_used = time.time() - 1000
     assert should_idle_unload(mm, 20) is True

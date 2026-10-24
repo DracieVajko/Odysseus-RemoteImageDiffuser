@@ -3,7 +3,7 @@ from unified.engine import init_diffusion_engine, try_real_inpaint
 
 
 def test_init_is_safe_without_torch():
-    # V sys pythone bez torch nesmie spadnúť, vráti False (engine nedostupný)
+    # In a system python without torch it must not crash, returns False (engine unavailable)
     ok = init_diffusion_engine()
     assert ok is False
 

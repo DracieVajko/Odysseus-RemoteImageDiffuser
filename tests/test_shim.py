@@ -1,4 +1,4 @@
-"""Legacy :4444 shim — preposiela všetko na unified :8101 (stdlib, bez závislostí)."""
+"""Legacy :4444 shim — forwards everything to unified :8101 (stdlib, no dependencies)."""
 import json
 import threading
 import urllib.request

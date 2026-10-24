@@ -1,6 +1,6 @@
-"""Audio proxy — unified_server nemá faster-whisper vo vlastnom env,
-tak reálny prepis deleguje na bežiacu WhisperApi službu (:4444).
-Bez nej vráti None a endpoint ide stub cestou (kontrakt drží tvar)."""
+"""Audio proxy — unified_server has no faster-whisper in its own env,
+so real transcription delegates to the running WhisperApi service (:4444).
+Without it, returns None and the endpoint takes the stub path (the contract shape holds)."""
 import json
 import threading
 from http.server import BaseHTTPRequestHandler, HTTPServer

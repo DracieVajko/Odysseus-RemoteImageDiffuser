@@ -1,4 +1,4 @@
-"""ModelManager — vždy max 1 ťažký model rezidentný."""
+"""ModelManager — always at most 1 heavy model resident."""
 import pytest
 from unified.model_manager import ModelManager, ModelLoadingError
 

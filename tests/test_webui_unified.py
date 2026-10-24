@@ -1,4 +1,4 @@
-"""Unified WebUI musí mať 4 taby: Generate, Edit/Inpaint, Upscale, Transcribe."""
+"""Unified WebUI must have 4 tabs: Generate, Edit/Inpaint, Upscale, Transcribe."""
 from fastapi.testclient import TestClient
 import unified_server as us
 

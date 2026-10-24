@@ -1,0 +1,29 @@
+# Prism test prompts
+
+## Text-to-image
+a red cube on a wooden table, soft light, photo
+a blue sphere on a white background, studio
+a cozy mountain cabin at sunset, pine forest, detailed
+a cyberpunk street at night, neon signs, rain
+a bowl of fruit on a kitchen counter, natural light
+
+## Negative prompt (default)
+blurry, low quality, distorted, watermark, text, extra fingers
+
+## Image-to-image
+make it blue
+add snow, winter, night lights
+convert to watercolor painting
+make it look like a photograph
+
+## Inpaint (add)
+a glowing blue sphere
+a small wooden toy
+a red flower
+
+## Inpaint (remove)
+empty background, clean surface
+empty street, no people
+
+## Inpaint (color)
+(no prompt required; pick a target color)

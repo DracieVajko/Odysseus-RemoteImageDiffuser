@@ -1,4 +1,4 @@
-"""VLM caption — zlý vstup 400, chýbajúci model 503, nie 500."""
+"""VLM caption — bad input 400, missing model 503, not 500."""
 import pytest
 from unified.vlm import caption_image_b64, find_vlm_dir, EngineMissing
 import base64
@@ -27,7 +27,7 @@ def test_caption_missing_model_raises(tmp_path):
 
 
 def test_caption_contract_no_model():
-    # Bez váhy endpoint hlási 503 will-not-load (overené cez TestClient).
+    # Without weights the endpoint reports 503 will-not-load (verified via TestClient).
     import os
     os.environ["UNIFIED_NO_ENGINE"] = "1"
     from fastapi.testclient import TestClient

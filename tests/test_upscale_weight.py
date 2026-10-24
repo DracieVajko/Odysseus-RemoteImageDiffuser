@@ -1,4 +1,4 @@
-"""Upscale — weight discovery je čistá funkcia (testovateľná bez torch)."""
+"""Upscale — weight discovery is a pure function (testable without torch)."""
 from unified.upscale import find_weight, upscale_image_b64
 import base64
 import io
@@ -18,7 +18,7 @@ def test_find_weight_none_when_absent(tmp_path):
 def test_find_weight_finds_pth(tmp_path):
     w = tmp_path / "RealESRGAN_x4plus.pth"
     with open(w, "wb") as f:
-        f.truncate(11 * 1024 * 1024)  # sparse, len aby prešiel size guard
+        f.truncate(11 * 1024 * 1024)  # sparse, only to pass the size guard
     assert find_weight([tmp_path]) == w
 
 

@@ -1,4 +1,4 @@
-"""ffmpeg_pre gate — validácia skôr ako drahá inferencia."""
+"""ffmpeg_pre gate — validation before expensive inference."""
 import pytest
 from pathlib import Path
 from unified.ffmpeg_pre import (
