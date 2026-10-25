@@ -30,6 +30,11 @@ import io.ktor.server.routing.routing
 import io.ktor.http.content.PartData
 import io.ktor.http.content.forEachPart
 import io.ktor.utils.io.core.readBytes
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.decodeFromString
 import kotlinx.serialization.json.Json
@@ -186,6 +191,15 @@ class ApiServer(
     private val progress = ConcurrentHashMap<String, JobProgress>()
     private var engine: NettyApplicationEngine? = null
 
+    // Heavy inference is serialized: two concurrent ORT runs crashed with
+    // SIGSEGV inside libonnxruntime on Android. limitedParallelism(1) queues
+    // requests without blocking the Ktor/Netty event loop.
+    private val heavyDispatcher = Dispatchers.IO.limitedParallelism(1)
+    // The LCM engine now stays resident between requests (repeated ORT
+    // session init/release churn was crashing the process); it is released
+    // after 10 minutes without image work.
+    @Volatile private var lastImageUse = 0L
+
     fun start(wait: Boolean = false): NettyApplicationEngine {
 // Explicit 0.0.0.0: the default bind may be IPv6-only ([::]), which adb forward
 // (IPv4 127.0.0.1) cannot reach — requests then hang/500.
@@ -201,6 +215,18 @@ class ApiServer(
     }
 
     private fun Application.module() {
+        launch {
+            // Idle unload keeps the RAM budget honest without re-initialising
+            // the ONNX sessions on every request.
+            while (isActive) {
+                delay(60_000)
+                val idleMs = System.currentTimeMillis() - lastImageUse
+                if (lastImageUse > 0 && idleMs > 10 * 60_000 && LcmOnnxEngine.isReady()) {
+                    withContext(heavyDispatcher) { LcmOnnxEngine.release() }
+                    android.util.Log.i("ApiServer", "idle unload: LCM engine released")
+                }
+            }
+        }
         // Remote fallback: endpoint handlers handle auto-forward via try-catch on ModelWillNotLoadError
 // Audio stays local (JNI). Image generation is local too (ONNX).
         install(ContentNegotiation) {
@@ -574,37 +600,42 @@ class ApiServer(
                     return@post
                 }
                 val modelDir = downloader.modelDir(modelId)
-                WhisperLib.release()
-                if (!LcmOnnxEngine.isReady()) {
-                    manager.setLoading(modelId, true)
-                    try {
-                        if (!LcmOnnxEngine.init(ctx, modelDir)) {
-                            throw ModelWillNotLoadError("LCM engine init failed: " + LcmOnnxEngine.lastError, -1, -1)
+                lastImageUse = System.currentTimeMillis()
+                // Serialize the heavy path: init + UNet steps.
+                val generated = withContext(heavyDispatcher) {
+                    WhisperLib.release()
+                    if (!LcmOnnxEngine.isReady()) {
+                        manager.setLoading(modelId, true)
+                        try {
+                            if (!LcmOnnxEngine.init(ctx, modelDir)) {
+                                throw ModelWillNotLoadError("LCM engine init failed: " + LcmOnnxEngine.lastError, -1, -1)
+                            }
+                        } finally {
+                            manager.setLoading(modelId, false)
                         }
-                    } finally {
-                        manager.setLoading(modelId, false)
                     }
-                }
-                // The ONNX engine is square; use the larger side and report the
-                // actual size (the requested WxH may be non-square or > 512).
-                val side = maxOf(w, h).coerceIn(256, 512)
-                val images = ArrayList<String>(req.n)
-                for (i in 0 until req.n) {
-                    val bmp = LcmOnnxEngine.generate(
-                        req.prompt, req.negative_prompt, req.guidance, steps, side,
-                        seed = System.nanoTime() + i,
-                    )
-                    if (bmp == null) {
-                        LcmOnnxEngine.release()
-                        throw ModelWillNotLoadError("LCM generation failed: " + LcmOnnxEngine.lastError, -1, -1)
+                    // The ONNX engine is square; use the larger side and report the
+                    // actual size (the requested WxH may be non-square or > 512).
+                    val side = maxOf(w, h).coerceIn(256, 512)
+                    val images = ArrayList<String>(req.n)
+                    for (i in 0 until req.n) {
+                        val bmp = LcmOnnxEngine.generate(
+                            req.prompt, req.negative_prompt, req.guidance, steps, side,
+                            seed = System.nanoTime() + i,
+                        )
+                        if (bmp == null) {
+                            LcmOnnxEngine.release()
+                            throw ModelWillNotLoadError("LCM generation failed: " + LcmOnnxEngine.lastError, -1, -1)
+                        }
+                        val baos = java.io.ByteArrayOutputStream()
+                        bmp.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, baos)
+                        images.add(android.util.Base64.encodeToString(baos.toByteArray(), android.util.Base64.NO_WRAP))
+                        bmp.recycle()
                     }
-                    val baos = java.io.ByteArrayOutputStream()
-                    bmp.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, baos)
-                    images.add(android.util.Base64.encodeToString(baos.toByteArray(), android.util.Base64.NO_WRAP))
-                    bmp.recycle()
+                    // Keep the engine resident; the idle unloader releases it.
+                    side to images
                 }
-                // Unload model after generation to free RAM (re-init on next request).
-                LcmOnnxEngine.release()
+                val (side, images) = generated
                 call.respond(
                     jsonOf(
                         "created" to System.currentTimeMillis() / 1000,
@@ -662,21 +693,23 @@ class ApiServer(
                     call.respond(HttpStatusCode.InternalServerError, jsonOf("error" to "no app context"))
                     return@post
                 }
-                if (!LcmOnnxEngine.isReady()) {
-                    manager.setLoading(modelId, true)
-                    try { LcmOnnxEngine.init(ctx, downloader.modelDir(modelId)) }
-                    finally { manager.setLoading(modelId, false) }
-                }
                 val src = android.graphics.BitmapFactory.decodeByteArray(imageBytes, 0, imageBytes.size)
                     ?: run {
                         call.respond(HttpStatusCode.BadRequest, jsonOf("error" to "cannot decode image"))
                         return@post
                     }
                 val (w, h) = parseSize(size) ?: (512 to 512)
-                val out = LcmOnnxEngine.img2img(
-                    src, prompt, steps = steps, size = maxOf(w, h).coerceAtMost(512),
-                )
-                LcmOnnxEngine.release()
+                lastImageUse = System.currentTimeMillis()
+                val out = withContext(heavyDispatcher) {
+                    if (!LcmOnnxEngine.isReady()) {
+                        manager.setLoading(modelId, true)
+                        try { LcmOnnxEngine.init(ctx, downloader.modelDir(modelId)) }
+                        finally { manager.setLoading(modelId, false) }
+                    }
+                    LcmOnnxEngine.img2img(
+                        src, prompt, steps = steps, size = maxOf(w, h).coerceAtMost(512),
+                    )
+                }
                 if (out == null) {
                     throw ModelWillNotLoadError("img2img failed: " + LcmOnnxEngine.lastError, -1, -1)
                 }
@@ -709,11 +742,6 @@ class ApiServer(
                     call.respond(HttpStatusCode.InternalServerError, jsonOf("error" to "no app context"))
                     return@post
                 }
-                if (!LcmOnnxEngine.isReady()) {
-                    manager.setLoading(modelId, true)
-                    try { LcmOnnxEngine.init(ctx, downloader.modelDir(modelId)) }
-                    finally { manager.setLoading(modelId, false) }
-                }
                 val src = decodeB64Image(req.image)
                 val mask = decodeB64Image(req.mask)
                 if (src == null || mask == null) {
@@ -724,17 +752,24 @@ class ApiServer(
                 val side = maxOf(req.width, req.height).coerceIn(256, 512)
                 val colorInt = parseHexColor(req.color)
                 val t0 = System.currentTimeMillis()
-                val out = LcmOnnxEngine.inpaint(
-                    src, mask, req.prompt,
-                    negativePrompt = req.negative_prompt,
-                    guidance = req.guidance,
-                    strength = req.strength.toFloat(),
-                    steps = steps,
-                    size = side,
-                    mode = req.mode,
-                    color = colorInt,
-                )
-                LcmOnnxEngine.release()
+                lastImageUse = t0
+                val out = withContext(heavyDispatcher) {
+                    if (!LcmOnnxEngine.isReady()) {
+                        manager.setLoading(modelId, true)
+                        try { LcmOnnxEngine.init(ctx, downloader.modelDir(modelId)) }
+                        finally { manager.setLoading(modelId, false) }
+                    }
+                    LcmOnnxEngine.inpaint(
+                        src, mask, req.prompt,
+                        negativePrompt = req.negative_prompt,
+                        guidance = req.guidance,
+                        strength = req.strength.toFloat(),
+                        steps = steps,
+                        size = side,
+                        mode = req.mode,
+                        color = colorInt,
+                    )
+                }
                 if (out == null) {
                     throw ModelWillNotLoadError("inpaint failed: " + LcmOnnxEngine.lastError, -1, -1)
                 }
@@ -792,28 +827,29 @@ class ApiServer(
                 switchTo("upscale", req.model)
                 requireModelReady("realesrgan-x4plus-ncnn")
                 val rid = req.request_id.ifEmpty { UUID.randomUUID().toString() }
-                if (!RealEsrganNcnnEngine.isReady()) {
-                    val modelDir = downloader.modelDir("realesrgan-x4plus-ncnn")
-                    val ctx = appContext ?: run {
-                        call.respond(HttpStatusCode.InternalServerError, jsonOf("error" to "no app context"))
-                        return@post
-                    }
-                    manager.setLoading("realesrgan-x4plus-ncnn", true)
-                    try {
-                        if (!RealEsrganNcnnEngine.init(ctx, modelDir)) {
-                            throw ModelWillNotLoadError("Real-ESRGAN NCNN init failed: " + RealEsrganNcnnEngine.lastError, -1, -1)
-                        }
-                    } finally {
-                        manager.setLoading("realesrgan-x4plus-ncnn", false)
-                    }
-                }
                 val src = decodeB64Image(req.image)
                 if (src == null) {
                     call.respond(HttpStatusCode.BadRequest, jsonOf("error" to "invalid image base64"))
                     return@post
                 }
+                val ctx = appContext ?: run {
+                    call.respond(HttpStatusCode.InternalServerError, jsonOf("error" to "no app context"))
+                    return@post
+                }
                 val t0 = System.currentTimeMillis()
-                val out = RealEsrganNcnnEngine.upscale(src, req.scale)
+                val out = withContext(heavyDispatcher) {
+                    if (!RealEsrganNcnnEngine.isReady()) {
+                        manager.setLoading("realesrgan-x4plus-ncnn", true)
+                        try {
+                            if (!RealEsrganNcnnEngine.init(ctx, downloader.modelDir("realesrgan-x4plus-ncnn"))) {
+                                throw ModelWillNotLoadError("Real-ESRGAN NCNN init failed: " + RealEsrganNcnnEngine.lastError, -1, -1)
+                            }
+                        } finally {
+                            manager.setLoading("realesrgan-x4plus-ncnn", false)
+                        }
+                    }
+                    RealEsrganNcnnEngine.upscale(src, req.scale)
+                }
                 src.recycle()
                 if (out == null) {
                     throw ModelWillNotLoadError("Real-ESRGAN NCNN upscale failed: " + RealEsrganNcnnEngine.lastError, -1, -1)
@@ -837,28 +873,29 @@ class ApiServer(
                 switchTo("vlm", req.model)
                 requireModelReady("smolvlm-500m-gguf")
                 val rid = req.request_id.ifEmpty { UUID.randomUUID().toString() }
-                if (!SmolVlmEngine.isReady()) {
-                    val modelDir = downloader.modelDir("smolvlm-500m-gguf")
-                    val ctx = appContext ?: run {
-                        call.respond(HttpStatusCode.InternalServerError, jsonOf("error" to "no app context"))
-                        return@post
-                    }
-                    manager.setLoading("smolvlm-500m-gguf", true)
-                    try {
-                        if (!SmolVlmEngine.init(ctx, modelDir)) {
-                            throw ModelWillNotLoadError("SmolVLM llama.cpp init failed: " + SmolVlmEngine.lastError, -1, -1)
-                        }
-                    } finally {
-                        manager.setLoading("smolvlm-500m-gguf", false)
-                    }
-                }
                 val src = decodeB64Image(req.image)
                 if (src == null) {
                     call.respond(HttpStatusCode.BadRequest, jsonOf("error" to "invalid image base64"))
                     return@post
                 }
+                val ctx = appContext ?: run {
+                    call.respond(HttpStatusCode.InternalServerError, jsonOf("error" to "no app context"))
+                    return@post
+                }
                 val t0 = System.currentTimeMillis()
-                val caption = SmolVlmEngine.caption(src, req.prompt, req.max_tokens ?: 256)
+                val caption = withContext(heavyDispatcher) {
+                    if (!SmolVlmEngine.isReady()) {
+                        manager.setLoading("smolvlm-500m-gguf", true)
+                        try {
+                            if (!SmolVlmEngine.init(ctx, downloader.modelDir("smolvlm-500m-gguf"))) {
+                                throw ModelWillNotLoadError("SmolVLM llama.cpp init failed: " + SmolVlmEngine.lastError, -1, -1)
+                            }
+                        } finally {
+                            manager.setLoading("smolvlm-500m-gguf", false)
+                        }
+                    }
+                    SmolVlmEngine.caption(src, req.prompt, req.max_tokens ?: 256)
+                }
                 src.recycle()
                 if (caption == null) {
                     throw ModelWillNotLoadError("SmolVLM llama.cpp caption failed: " + SmolVlmEngine.lastError, -1, -1)
@@ -980,6 +1017,11 @@ switchTo("audio", effectiveModel) // 503 loading while switching image→audio
         if (prev == "audio" && kind != "audio") WhisperLib.release()
         if (prev == "upscale" && kind != "upscale") RealEsrganNcnnEngine.release()
         if (prev == "vlm" && kind != "vlm") SmolVlmEngine.release()
+        // Image stays resident for the common generate -> inpaint flow; free it
+        // only when another heavy engine (upscale/VLM) needs the RAM.
+        if (prev == "image" && (kind == "upscale" || kind == "vlm")) {
+            LcmOnnxEngine.release()
+        }
         return manager.ensure(kind, id)
     }
 
