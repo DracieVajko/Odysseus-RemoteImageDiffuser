@@ -332,3 +332,17 @@ Test files: `test_pc_states.py` (PASS) and `test_android_states.py`
       + `models/SmolVLM_500M` (already downloaded).
 - [x] Measured: caption 200 (first 42 s incl. load, cached ~7 s), chat 200 ~3 s.
 - [x] `test_pc_features.py`: 37/37 (adds upscale, caption, chat + assertions).
+
+## Android stability (2026-10-25)
+
+- [x] Root cause found from the tombstone: SIGSEGV in `libonnxruntime.so`
+      (`OrtSession.run` ← `LcmOnnxEngine.runUnet`) on the Netty event loop.
+- [x] Heavy inference serialized on `Dispatchers.IO.limitedParallelism(1)`;
+      concurrent requests queue (`queue=1`) and the event loop stays free.
+- [x] LCM engine stays resident; idle unload after 10 minutes and on a switch
+      to upscale/VLM. Per-request release removed (session churn).
+- [x] Concurrent state test PASS: both 200, PID stable, state back to idle.
+- [x] Feature suite **21/21**; masks black 0.0 / white 144.6 / gray 62.0.
+- [x] Load test **20/20**, PID 13108 stable, RSS 3.69–3.78 GB, threads 96.
+- [x] Warm generate 256/4 **7–10 s**, inpaint add/remove **~9 s** (was 25–33 s).
+- [x] No crash entries in logcat during the suite, load or state tests.

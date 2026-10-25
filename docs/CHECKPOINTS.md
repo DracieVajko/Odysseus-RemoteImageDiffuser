@@ -398,6 +398,48 @@ shares system memory. AMD support therefore needs `onnxruntime-directml` in a
 separate env with a non-QDQ (FP16/FP32) model; with the current INT8 asset it
 stays on CPU.
 
+## 2026-10-25 — Android ORT crash fixed
+
+Symptom: two concurrent image requests killed the process with SIGSEGV; the
+20-request load test also died after ~18 requests.
+
+Tombstone (logcat, `debuggerd`):
+```
+Fatal signal 11 (SIGSEGV), code 1 (SEGV_MAPERR) in tid eventLoopGroupP
+#00..#09 libonnxruntime.so
+#10 Java_ai_onnxruntime_OrtSession_run
+#29 LcmOnnxEngine.runUnet
+#34 LcmOnnxEngine.denoise
+#44 LcmOnnxEngine.generate
+```
+Root causes:
+1. Heavy ONNX inference ran on the Ktor/Netty event-loop thread.
+2. Two ORT `run()` calls could overlap (no serialization).
+3. The engine was released after every request and re-initialised on the next
+   one; the repeated session churn added native fragmentation.
+
+Fix (`ApiServer.kt`):
+- `heavyDispatcher = Dispatchers.IO.limitedParallelism(1)`; every heavy path
+  (init + generate / img2img / inpaint / upscale / caption) runs in
+  `withContext(heavyDispatcher)`, so requests queue without blocking the
+  event loop and only one ORT run is active.
+- The LCM engine stays **resident** between requests; a coroutine releases it
+  after 10 minutes without image work (idle unload). Switching to upscale or
+  VLM also releases it to free RAM.
+- Per-request `LcmOnnxEngine.release()` removed (it caused the churn).
+
+Verified on the device (Vivo V2415, Android 16):
+| Test | Result |
+|---|---|
+| concurrent state | `queue=1`, both 200, PID stable, state returns to idle |
+| feature suite | **21/21** |
+| mask polarity | black 0.0 / white 144.6 / gray 62.0 / alpha 62.0 |
+| load test (20 mixed) | **20/20**, PID 13108 stable, RSS 3.69–3.78 GB, threads 96 |
+| warm generate 256/4 | **7–10 s** (was 25–33 s with re-init) |
+| inpaint add/remove | **~9 s** (was ~25 s) |
+| inpaint color | 0.2 s |
+| crash in logcat | none |
+
 ## 2026-10-25 — Upscale and VLM fixes
 
 Two old gaps closed, plus two real bugs found in the torch upscale path.
