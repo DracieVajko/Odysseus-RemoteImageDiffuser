@@ -398,3 +398,41 @@ shares system memory. AMD support therefore needs `onnxruntime-directml` in a
 separate env with a non-QDQ (FP16/FP32) model; with the current INT8 asset it
 stays on CPU.
 
+## 2026-10-25 — Upscale and VLM fixes
+
+Two old gaps closed, plus two real bugs found in the torch upscale path.
+
+**Real-ESRGAN architecture (bug):** the vendored RRDBNet did not match
+BasicSR. `RRDB` summed three dense blocks in parallel and the network was
+missing the LeakyReLU after `conv_up1`, `conv_up2` and `conv_hr`. On a 0.5
+gray input the old model emitted ~2.2e10; the fixed model emits 0.508.
+Consequence: the torch upscale path had always produced garbage.
+
+**ONNX upscale (new):** `convert_esrgan_onnx.py` loads the `.pth` with the
+correct key names (`conv1..conv5`, `conv_up1/2`), exports with dynamic H/W,
+inlines the external weights and validates against torch:
+`max abs diff 2e-6`, single 67 MB `RealESRGAN_x4plus.onnx`.
+`find_onnx_weight` accepts inline or `.onnx.data` weights.
+`PRISM_UPSCALE_ENGINE=auto|torch|onnx|pillow` selects the path.
+
+**Single-resident fix:** upscale now calls
+`_manager.ensure("upscale", "RealESRGAN_x4v3")`, and `_release_engines` calls
+`release_upscale()`. Switching from generation to upscale frees the 5.9 GB
+LCM sessions, so ESRGAN can use the GPU instead of spilling to CPU.
+Measured 512→1024: **torch CUDA 5.4–6.2 s** (was 117 s via CPU ONNX),
+ONNX CUDA 13.6 s, ONNX CPU 27 s on a 256×256 crop.
+
+**VLM (new):** `torch 2.14.1+cu130` + `transformers 5.20.2` installed; the
+`models/SmolVLM_500M` snapshot was already present. Caption and vision chat
+return real text now: caption first call 42 s (load included), cached ~7 s;
+chat ~3 s. The manager still releases the LCM pipeline before VLM and the VLM
+before generation, so only one heavy engine is resident.
+
+**Verification:** `test_pc_features.py` **37/37 passed** (adds upscale,
+caption and chat with assertions), ffmpeg 23/23, states PASS, `pytest` 44.
+GPU upscale engine reported as `realesrgan-torch`.
+
+**AMD:** unchanged and documented — DirectML cannot execute the INT8 QDQ
+graph, and the iGPU shares system memory. A non-QDQ FP16/FP32 export would be
+needed; the discrete NVIDIA GPU is the practical path on this machine.
+

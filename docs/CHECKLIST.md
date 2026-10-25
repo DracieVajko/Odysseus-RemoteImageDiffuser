@@ -315,3 +315,20 @@ Test files: `test_pc_states.py` (PASS) and `test_android_states.py`
 - [x] `PRISM_ONNX_PROVIDER=cpu` documented as the fallback for the 6 GB card.
 - [ ] AMD iGPU: DirectML cannot run the INT8 QDQ graph → CPU only; needs a
       non-QDQ FP16/FP32 model in a separate `onnxruntime-directml` env.
+
+## Upscale / VLM (PC, 2026-10-25)
+
+- [x] Real-ESRGAN torch architecture corrected: RRDB is sequential + 0.2
+      residual, and `conv_up1/up2/hr` need LeakyReLU (previously the model
+      produced garbage).
+- [x] `convert_esrgan_onnx.py` exports `RealESRGAN_x4plus.onnx` (single 67 MB
+      file, max diff vs torch 2e-6).
+- [x] Engine order: torch → ONNX → Pillow; `PRISM_UPSCALE_ENGINE=torch|onnx|pillow`.
+- [x] Upscale is its own resident kind; switching releases the LCM pipeline,
+      so the 6 GB card has VRAM for ESRGAN.
+- [x] Measured 512→1024: torch CUDA **5.4–6.2 s**, ONNX CUDA 13.6 s,
+      ONNX CPU 27 s (256→512 crop), Pillow instant.
+- [x] Caption/chat now work: `torch 2.14.1+cu130` + `transformers 5.20`
+      + `models/SmolVLM_500M` (already downloaded).
+- [x] Measured: caption 200 (first 42 s incl. load, cached ~7 s), chat 200 ~3 s.
+- [x] `test_pc_features.py`: 37/37 (adds upscale, caption, chat + assertions).

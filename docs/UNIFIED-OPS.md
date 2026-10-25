@@ -36,6 +36,8 @@ Env: `UNIFIED_WHISPER_URL` (default `http://127.0.0.1:4444`),
 
 ```powershell
 pip install onnxruntime-gpu nvidia-cudnn-cu13   # NVIDIA (CUDA 13 + cuDNN 9)
+pip install torch --index-url https://download.pytorch.org/whl/cu130  # VLM + ESRGAN (CUDA)
+pip install transformers                        # SmolVLM caption/chat
 # or, in a separate env, for AMD:
 pip install onnxruntime-directml
 ```
@@ -45,9 +47,24 @@ pip install onnxruntime-directml
   DML cannot fuse that graph.
 - `/health` shows `device` and `onnx_provider`.
 - The 6 GB RTX 3060 runs at ~5.9 GB VRAM; use `PRISM_ONNX_PROVIDER=cpu` if
-  other GPU apps need memory.
+  other GPU apps need memory. Switching to upscale/VLM releases the LCM
+  sessions first.
 - AMD: the current INT8 QDQ asset runs on CPU only; DirectML needs a
   non-QDQ (FP16/FP32) ONNX model.
+
+### Upscale
+
+- `download_models.py --preset upscale` fetches `RealESRGAN_x4plus.pth`.
+- Convert once for torch-free inference:
+  `python convert_esrgan_onnx.py` → `RealESRGAN_x4plus.onnx` (67 MB, single file).
+- `PRISM_UPSCALE_ENGINE=auto|torch|onnx|pillow` (default `auto`:
+  torch → ONNX → Pillow). Measured 512→1024 on CUDA: ~6 s.
+
+### VLM
+
+- `download_models.py --preset vlm` fetches the SmolVLM-500M snapshot (~1 GB).
+- Requires `torch` + `transformers`; without them the endpoint returns
+  503 will-not-load (never fake output).
 
 ### Install / uninstall from WebUI and CLI
 
