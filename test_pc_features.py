@@ -118,6 +118,25 @@ if r is not None and r.status_code == 200:
     (OUT / "pc_test_inpaint_color.png").write_bytes(base64.b64decode(r.json()["image"]))
     print(f"      engine={r.json().get('engine')}")
 
+print("\n=== UPSCALE / VISION ===")
+r = check("upscale 2x", "POST", "/v1/images/upscale", json={"image": img_b64, "scale": 2})
+if r is not None and r.status_code == 200:
+    expect("  realesrgan engine", str(r.json().get("engine", "")).startswith("realesrgan"),
+           f"engine={r.json().get('engine')}")
+
+r = check("caption", "POST", "/v1/images/caption", json={"image": img_b64, "max_tokens": 32})
+if r is not None and r.status_code == 200:
+    expect("  caption has text", bool(r.json().get("text")), r.json().get("text", "")[:50])
+
+r = check("chat vision", "POST", "/v1/chat/completions", json={
+    "messages": [{"role": "user", "content": [
+        {"type": "image_url", "image_url": {"url": "data:image/png;base64," + img_b64}},
+        {"type": "text", "text": "What is in the image?"},
+    ]}], "max_tokens": 32})
+if r is not None and r.status_code == 200:
+    content = r.json().get("choices", [{}])[0].get("message", {}).get("content", "")
+    expect("  chat has content", bool(content), content[:50])
+
 print("\n=== FFMPEG ===")
 check("convert-image png->jpg", "POST", "/v1/ffmpeg/convert-image",
       files={"file": ("test.png", (TD / "images" / "test_512.png").read_bytes(), "image/png")},

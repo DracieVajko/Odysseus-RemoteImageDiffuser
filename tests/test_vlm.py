@@ -26,10 +26,9 @@ def test_caption_missing_model_raises(tmp_path):
         caption_image_b64(_red_dot_b64(), search_dirs=[tmp_path])
 
 
-def test_caption_contract_no_model():
-    # Without weights the endpoint reports 503 will-not-load (verified via TestClient).
-    import os
-    os.environ["UNIFIED_NO_ENGINE"] = "1"
+def test_caption_contract_no_model(monkeypatch):
+    # UNIFIED_NO_ENGINE simulates a missing engine: 503 will-not-load, never 500.
+    monkeypatch.setenv("UNIFIED_NO_ENGINE", "1")
     from fastapi.testclient import TestClient
     import unified_server as us
     c = TestClient(us.app)
@@ -49,9 +48,8 @@ def test_chat_completions_no_image_400():
     assert r.status_code == 400, r.text[:200]
 
 
-def test_chat_completions_vision_no_model_503():
-    import os
-    os.environ["UNIFIED_NO_ENGINE"] = "1"
+def test_chat_completions_vision_no_model_503(monkeypatch):
+    monkeypatch.setenv("UNIFIED_NO_ENGINE", "1")
     from fastapi.testclient import TestClient
     import unified_server as us
     c = TestClient(us.app)

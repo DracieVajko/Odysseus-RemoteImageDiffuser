@@ -67,6 +67,11 @@ def _release_engines(reason: str = ""):
     except Exception:
         pass
     try:
+        from unified.upscale import release_upscale
+        release_upscale()
+    except Exception:
+        pass
+    try:
         release_vlm()
     except Exception:
         pass
@@ -185,6 +190,11 @@ def _image_registry():
         return {"image_models": {}, "default_image_model": "DreamShaper_8",
                 "audio_models": ["tiny", "base", "small", "medium", "turbo", "large"],
                 "default_audio_model": "small"}
+
+
+def _engines_disabled() -> bool:
+    v = os.environ.get("UNIFIED_NO_ENGINE", "")
+    return v not in ("", "0", "false", "False", "no")
 
 
 def _raise_loading(e: ModelLoadingError):
@@ -570,6 +580,10 @@ def harmonize(req: HarmonizeRequest):
 @app.post("/v1/images/upscale")
 def upscale(req: UpscaleRequest):
     rid = req.request_id or f"req-{uuid.uuid4().hex[:8]}"
+    try:
+        _manager.ensure("upscale", "RealESRGAN_x4v3")
+    except ModelLoadingError as e:
+        return _raise_loading(e)
     if not req.image:
         return JSONResponse(status_code=400, content={"error": "missing image b64"})
     try:
@@ -588,6 +602,9 @@ def upscale(req: UpscaleRequest):
 @app.post("/v1/images/caption")
 def caption(req: CaptionRequest):
     rid = req.request_id or f"req-{uuid.uuid4().hex[:8]}"
+    if _engines_disabled():
+        return JSONResponse(status_code=503, content={
+            "error": "will not load", "detail": "engines disabled by UNIFIED_NO_ENGINE"})
     try:
         _manager.ensure("vlm", VLM_ID)
     except ModelLoadingError as e:
@@ -639,6 +656,9 @@ def chat_completions(body: dict):
     model = (body.get("model") or VLM_ID) if isinstance(body, dict) else VLM_ID
     messages = body.get("messages", []) if isinstance(body, dict) else []
     max_tokens = body.get("max_tokens", 256) if isinstance(body, dict) else 256
+    if _engines_disabled():
+        return JSONResponse(status_code=503, content={
+            "error": "will not load", "detail": "engines disabled by UNIFIED_NO_ENGINE"})
     try:
         _manager.ensure("vlm", VLM_ID)
     except ModelLoadingError as e:

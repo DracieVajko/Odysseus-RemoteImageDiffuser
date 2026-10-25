@@ -65,3 +65,6 @@ zipp==4.1.0
 # pip install faster-whisper    # local STT without the WhisperApi service (needs CTranslate2 CUDA DLLs on Windows)
 # pip install onnxruntime-gpu  # NVIDIA CUDA EP (also: pip install nvidia-cudnn-cu13)
 # pip install onnxruntime-directml  # AMD/DirectML EP (non-QDQ models only)
+# pip install torch --index-url https://download.pytorch.org/whl/cu130  # VLM + ESRGAN
+# pip install transformers      # SmolVLM caption/chat
+# pip install onnxscript        # only for convert_esrgan_onnx.py

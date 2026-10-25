@@ -9,6 +9,7 @@ DoS cap 8192px per side. scale 2/3: ESRGAN is x4 → the result is downsampled.
 import base64
 import io
 import logging
+import os
 import time
 from pathlib import Path
 from typing import Optional
@@ -18,8 +19,7 @@ from PIL import Image
 logger = logging.getLogger("unified.upscale")
 
 MAX_SIDE = 8192
-WEIGHT_NAMES = ("RealESRGAN_x4plus.pth", "RealESRGAN_x4plus.pt",
-                "RealESRGAN_x4plus.onnx")
+WEIGHT_NAMES = ("RealESRGAN_x4plus.pth", "RealESRGAN_x4plus.pt")
 
 _HERE = Path(__file__).resolve().parent.parent
 _DEFAULT_DIRS = (
@@ -42,8 +42,11 @@ def find_onnx_weight(dirs=None):
     for d in (dirs if dirs is not None else _DEFAULT_DIRS):
         d = Path(d)
         p = d / "RealESRGAN_x4plus.onnx"
-        if p.is_file() and p.stat().st_size > 10 * 1024 * 1024:
-            return p
+        if p.is_file():
+            data = p.with_suffix(".onnx.data")
+            size = p.stat().st_size + (data.stat().st_size if data.is_file() else 0)
+            if size > 10 * 1024 * 1024:
+                return p
     return None
 
 
@@ -60,18 +63,18 @@ def _rrdb_net():
     class ResidualDenseBlock(nn.Module):
         def __init__(self, nf=64, gc=32):
             super().__init__()
-            self.c1 = _conv(nf, gc)
-            self.c2 = _conv(nf + gc, gc)
-            self.c3 = _conv(nf + 2 * gc, gc)
-            self.c4 = _conv(nf + 3 * gc, gc)
-            self.c5 = _conv(nf + 4 * gc, nf)
+            self.conv1 = _conv(nf, gc)
+            self.conv2 = _conv(nf + gc, gc)
+            self.conv3 = _conv(nf + 2 * gc, gc)
+            self.conv4 = _conv(nf + 3 * gc, gc)
+            self.conv5 = _conv(nf + 4 * gc, nf)
 
         def forward(self, x):
-            x1 = F.leaky_relu(self.c1(x), 0.2, True)
-            x2 = F.leaky_relu(self.c2(torch.cat((x, x1), 1)), 0.2, True)
-            x3 = F.leaky_relu(self.c3(torch.cat((x, x1, x2), 1)), 0.2, True)
-            x4 = F.leaky_relu(self.c4(torch.cat((x, x1, x2, x3), 1)), 0.2, True)
-            return self.c5(torch.cat((x, x1, x2, x3, x4), 1)) * 0.2 + x
+            x1 = F.leaky_relu(self.conv1(x), 0.2, True)
+            x2 = F.leaky_relu(self.conv2(torch.cat((x, x1), 1)), 0.2, True)
+            x3 = F.leaky_relu(self.conv3(torch.cat((x, x1, x2), 1)), 0.2, True)
+            x4 = F.leaky_relu(self.conv4(torch.cat((x, x1, x2, x3), 1)), 0.2, True)
+            return self.conv5(torch.cat((x, x1, x2, x3, x4), 1)) * 0.2 + x
 
     class RRDB(nn.Module):
         def __init__(self, nf=64, gc=32):
@@ -81,31 +84,56 @@ def _rrdb_net():
             self.rdb3 = ResidualDenseBlock(nf, gc)
 
         def forward(self, x):
-            return self.rdb1(x) + self.rdb2(x) + self.rdb3(x)
+            # BasicSR RRDB: sequential dense blocks + 0.2 residual scaling.
+            out = self.rdb2(self.rdb1(x))
+            out = self.rdb3(out)
+            return out * 0.2 + x
 
     class RRDBNet(nn.Module):
+        """BasicSR-compatible RRDBNet (official RealESRGAN_x4plus key names)."""
+
         def __init__(self):
             super().__init__()
             self.conv_first = _conv(3, 64)
             self.body = nn.Sequential(*[RRDB(64) for _ in range(23)])
             self.conv_body = _conv(64, 64)
-            self.up1 = nn.Sequential(nn.Upsample(scale_factor=2, mode="nearest"),
-                                     _conv(64, 64))
-            self.up2 = nn.Sequential(nn.Upsample(scale_factor=2, mode="nearest"),
-                                     _conv(64, 64))
+            self.conv_up1 = _conv(64, 64)
+            self.conv_up2 = _conv(64, 64)
             self.conv_hr = _conv(64, 64)
             self.conv_last = _conv(64, 3)
 
         def forward(self, x):
             feat = self.conv_first(x)
             body = self.conv_body(self.body(feat)) + feat
-            out = self.up2(self.up1(body))
-            return self.conv_last(self.conv_hr(out))
+            out = F.leaky_relu(
+                self.conv_up1(F.interpolate(body, scale_factor=2, mode="nearest")), 0.2, True)
+            out = F.leaky_relu(
+                self.conv_up2(F.interpolate(out, scale_factor=2, mode="nearest")), 0.2, True)
+            return self.conv_last(F.leaky_relu(self.conv_hr(out), 0.2, True))
 
     return RRDBNet()
 
 
 _net_cache = {}
+
+
+def release_upscale() -> bool:
+    """Drop cached Real-ESRGAN sessions so the VRAM is actually freed."""
+    had = bool(_net_cache or _onnx_session)
+    _net_cache.clear()
+    _onnx_session.clear()
+    try:
+        import gc
+        gc.collect()
+    except Exception:
+        pass
+    try:
+        import torch
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+    except Exception:
+        pass
+    return had
 
 
 def _load_net(weight: Path, device: str):
@@ -117,10 +145,9 @@ def _load_net(weight: Path, device: str):
         sd = torch.load(str(weight), map_location="cpu", weights_only=True)
         if isinstance(sd, dict):
             sd = sd.get("params_ema", sd.get("params", sd))
-        own = net.state_dict()
-        sd = {k: v for k, v in sd.items() if k in own}
-        own.update(sd)
-        net.load_state_dict(own, strict=False)
+        if any(k.startswith("model.") for k in sd):
+            sd = {k[len("model."):]: v for k, v in sd.items()}
+        net.load_state_dict(sd, strict=True)
         net.eval().to(device)
         for p in net.parameters():
             p.requires_grad_(False)
@@ -223,8 +250,11 @@ def upscale_image_b64(image_b64: str, scale: int = 2, model: str = "RealESRGAN_x
         raise ValueError(f"upscaled {nw}x{nh} exceeds cap {MAX_SIDE}px")
     t0 = time.time()
     engine = "pillow"
-    weight_torch = find_weight() if model == "RealESRGAN_x4v3" else None
-    weight_onnx = find_onnx_weight() if model == "RealESRGAN_x4v3" else None
+    pref = (os.environ.get("PRISM_UPSCALE_ENGINE") or "auto").strip().lower()
+    want_torch = model == "RealESRGAN_x4v3" and pref in ("auto", "torch")
+    want_onnx = model == "RealESRGAN_x4v3" and pref in ("auto", "onnx")
+    weight_torch = find_weight() if want_torch else None
+    weight_onnx = find_onnx_weight() if want_onnx else None
     if weight_torch is not None:
         try:
             sr = _esrgan_upscale(img, weight_torch)

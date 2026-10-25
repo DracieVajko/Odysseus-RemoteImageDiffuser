@@ -22,8 +22,9 @@ def test_find_weight_finds_pth(tmp_path):
     assert find_weight([tmp_path]) == w
 
 
-def test_upscale_reports_engine():
+def test_upscale_reports_engine(monkeypatch):
+    monkeypatch.setenv("PRISM_UPSCALE_ENGINE", "pillow")
     out = upscale_image_b64(_red_dot_b64(16), 2)
-    assert out["engine"] in ("pillow", "realesrgan"), out.get("engine")
+    assert out["engine"] == "pillow", out.get("engine")
     raw = base64.b64decode(out["image"])
     assert Image.open(io.BytesIO(raw)).size == (32, 32)
