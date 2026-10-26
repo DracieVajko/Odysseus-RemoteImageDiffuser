@@ -12,7 +12,7 @@ Prism is **two independent products** that share one API contract:
 
 | Product | Runtime | UI | Dependencies |
 |---|---|---|---|
-| **PC server** | Python 3 + FastAPI + Uvicorn | WebUI (`webui_unified.html`) | optional torch/diffusers, onnxruntime, faster-whisper, ffmpeg |
+| **PC server** | Python 3 + FastAPI + Uvicorn | WebUI (`pc/webui_unified.html`) | optional torch/diffusers, onnxruntime, faster-whisper, ffmpeg |
 | **Android app** | Kotlin + Ktor + ONNX Runtime + whisper.cpp | native app (no WebUI) | none at runtime; models downloaded lazily |
 
 Both expose an **OpenAI-compatible HTTP API** on port `8101`, so external clients
@@ -29,13 +29,13 @@ Core principles:
 ## 2. Repository map
 
 ```
-unified_server.py              PC FastAPI app (routes, lifespan, middleware)
-webui_unified.html             PC WebUI (tabs, console, model manager, themes)
-unified/
+pc/unified_server.py              PC FastAPI app (routes, lifespan, middleware)
+pc/webui_unified.html             PC WebUI (tabs, console, model manager, themes)
+pc/unified/
   engine.py                    diffusion_server init + inpaint bridge
   lcm_onnx_numpy.py            ONNX LCM pipeline (txt2img/img2img/inpaint/harmonize)
   model_manager.py             single-resident gate + idle unload
-  models_manager.py            PC install/uninstall/state (download_models.py)
+  models_manager.py            PC install/uninstall/state (pc/download_models.py)
   model_finder.py              HF search + custom URL add/delete
   upscale.py                   Real-ESRGAN (torch) or Pillow fallback
   vlm.py                       SmolVLM caption/chat (transformers)
@@ -44,7 +44,7 @@ unified/
   ffmpeg_tools.py              presets + operations
   ffmpeg_pre.py                normalize audio/video for whisper
   ytdlp.py                     download audio from URL
-download_models.py             PC model download tasks (snapshot/file/url)
+pc/download_models.py             PC model download tasks (snapshot/file/url)
 models/                        PC weights (not committed)
 testdata/                      sample images/audio/video/prompts
 android/
@@ -101,7 +101,7 @@ Common JSON shapes:
 
 ### 4.1 Process and lifespan
 
-`unified_server.py` runs under Uvicorn. At startup:
+`pc/unified_server.py` runs under Uvicorn. At startup:
 1. `init_diffusion_engine()` initializes the optional torch/diffusers engine
    lazily (registry only, no weights).
 2. A background task `_idle_unloader()` runs every 30 s and unloads the resident
@@ -112,7 +112,7 @@ Common JSON shapes:
 
 ### 4.2 Single-resident ModelManager
 
-`unified/model_manager.py`:
+`pc/unified/model_manager.py`:
 - `ensure(kind, id)` — if a different model is resident, unload it first, then
   report `loading` (503) while the caller loads weights.
 - `begin()/end()` — in-flight counter.
@@ -132,7 +132,7 @@ Two backends, tried in order:
 otherwise CPU. Supports SD 1.5 / SDXL / SD-Turbo and negative prompts natively.
 
 **B. ONNX LCM fallback (no torch)**
-`unified/lcm_onnx_numpy.py` runs the same model as Android:
+`pc/unified/lcm_onnx_numpy.py` runs the same model as Android:
 1. **Tokenizer** — CLIP BPE from `tokenizer/vocab.json` + `merges.txt`.
 2. **Text encoder** `text_encoder/model.onnx` → `(1,77,768)`.
 3. **Scheduler** — LCM scaled-linear betas; timesteps for N steps
@@ -167,10 +167,10 @@ places supported nodes on the GPU and the rest on the CPU. CPU sessions use
 
 ### 4.5 Upscale, caption, chat
 
-- **upscale** (`unified/upscale.py`): Real-ESRGAN x4 (RRDBNet) when weights +
+- **upscale** (`pc/unified/upscale.py`): Real-ESRGAN x4 (RRDBNet) when weights +
   torch exist, tiled (256 px tiles, 16 px overlap); otherwise Pillow LANCZOS.
   scale 2/3 downsample the x4 result.
-- **caption/chat** (`unified/vlm.py`): SmolVLM-500M via transformers; without
+- **caption/chat** (`pc/unified/vlm.py`): SmolVLM-500M via transformers; without
   weights/torch returns `503 will-not-load`.
 
 ### 4.6 Audio
@@ -185,7 +185,7 @@ places supported nodes on the GPU and the rest on the CPU. CPU sessions use
 
 ### 4.7 FFmpeg
 
-`unified/ffmpeg_tools.py` provides:
+`pc/unified/ffmpeg_tools.py` provides:
 - **10 video presets**: H.264/H.265 (default/HQ/fast), mp4-small,
   mp4-discord (<10 MB), webm, gif.
 - **8 audio presets**: mp3 128/192/320, aac 128/192, wav-16k, opus, flac.
@@ -197,14 +197,14 @@ preset.
 
 ### 4.8 Model downloads (PC)
 
-`download_models.py` tasks are `snapshot` (HF repo), `file` (single HF file) or
+`pc/download_models.py` tasks are `snapshot` (HF repo), `file` (single HF file) or
 `url` (direct). `models_manager` runs installs in a thread and exposes state.
 Cancellation uses `_CANCEL` + `CancelledError`; URL downloads stop in the chunk
 loop, HF snapshots stop between files (per-file `hf_hub_download`).
 
 ### 4.9 WebUI
 
-`webui_unified.html`:
+`pc/webui_unified.html`:
 - Tabs: Text-to-image, Image-to-image, Inpaint (canvas mask), Upscale,
   Transcribe, Caption, Tools, Models, Settings.
 - Positive + negative prompt, guidance, resolution (256/512/768/custom), quality.
@@ -450,6 +450,7 @@ curl -F "file=@audio.wav" -F "language=en" http://<host>:8101/v1/audio/transcrip
 
 **PC**
 ```bash
+cd pc
 python -m uvicorn unified_server:app --host 0.0.0.0 --port 8101
 # WebUI: http://<pc>:8101/webui
 ```

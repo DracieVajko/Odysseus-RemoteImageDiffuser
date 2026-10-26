@@ -8,7 +8,7 @@ Quick context for continuing after a restart. The source of truth is the code, n
 - `ModelDownloader.kt` — custom download engine (resume, staging, manifest, cancel, progress).
 - `ModelCatalog.kt` — whisper-large-v3-turbo, LCM-Dreamshaper ONNX (QDQ), Real-ESRGAN NCNN, SmolVLM/SmolVLM2.
 - `LcmOnnxEngine.kt` — full LCM pipeline (CLIP BPE tokenizer, text encoder, UNet, LCM scheduler, VAE decode).
-  - The INT8 UNet was converted from QOperator (`ConvInteger`) to **QDQ** (`convert_lcm_qdq.py`); the phone runs the inline model (824 MB).
+  - The INT8 UNet was converted from QOperator (`ConvInteger`) to **QDQ** (`pc/tools/convert_lcm_qdq.py`); the phone runs the inline model (824 MB).
   - Text encoder `input_ids` must be **int32**.
 - `HardwareProfile` — adaptive threads (1-8), image size according to RAM.
 - Auto-split of long recordings (30s chunks) — verified on 2-minute and 45-minute files.
@@ -17,10 +17,10 @@ Quick context for continuing after a restart. The source of truth is the code, n
 - `largeHeap="true"` in the manifest (OOM fix on 45-minute files).
 - English-only codebase.
 
-### PC (unified/)
+### PC (pc/unified/)
 - Fully local server (FastAPI + diffusers + faster-whisper + ffmpeg).
 - Model management endpoints + custom URL download + real cancel.
-- LCM ONNX pipeline without torch: `unified/lcm_onnx_numpy.py`.
+- LCM ONNX pipeline without torch: `pc/unified/lcm_onnx_numpy.py`.
 - WebUI: console (scrollable/copy), Save transcript, Stop download.
 
 ### Verified

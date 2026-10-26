@@ -1,71 +1,59 @@
-# Odysseus RemoteImageDiffuser
+# Prism
 
-A lazy-loading, OpenAI-compatible Stable Diffusion image server for Windows
-and Linux with NVIDIA GPUs. Built as an **optional remote image backend for
-[Odysseus](https://github.com/)** — generate outside the Docker host over
-Tailscale or plain LAN. Also works standalone (WebUI, CLI).
+Two independent products live in this repository. You only need the folder for
+the one you want to run.
 
-- Lazy loading: nothing loaded at startup, VRAM stays free; the first request
-  loads the model, it stays resident (switching = unload + load)
-- Models live in `models/` (~19 GB, downloaded by script — **never committed**)
-- `GET /health`, `GET /v1/models`, `POST /v1/images/generations|edits|inpaint|harmonize`
-- Single-file WebUI at `/webui`, CLI (`generate_image.py`), `doctor` diagnostics
+| Product | Folder | What it is |
+|---|---|---|
+| **PC server + WebUI** | `pc/` | FastAPI server with an OpenAI-compatible API, ONNX/Diffusers image generation, LCM inpaint, Harmonize, Real-ESRGAN upscale, SmolVLM caption/chat, FFmpeg presets. GPU via CUDA or DirectML. |
+| **Android app** | `android/` | Native Prism app with an on-device Ktor server (ONNX LCM, whisper.cpp, inpaint, harmonize). No WebUI, no PC dependency. |
 
-## Requirements
+## Pick one
 
-- Windows 10/11 or Linux, NVIDIA GPU (tested on 6 GB; 8 GB+ better for SDXL)
-- Python 3.12, ~25 GB free disk (venv ~8 GB + models ~19 GB)
-- Tailscale (optional — plain LAN IP works the same way)
-
-## Quickstart (5 minutes)
+**PC only** — copy/download `pc/`, then:
 
 ```powershell
-cd <path>\Odysseus-RemoteImageDiffuser
-py -3.12 -m venv .venv
+cd pc
+python -m venv .venv
 .venv\Scripts\activate
-pip install torch==2.12.1+cu130 --index-url https://download.pytorch.org/whl/cu130
 pip install -r requirements.txt
-.venv\Scripts\python.exe download_models.py --preset odysseus-default
-.venv\Scripts\python.exe generate_image.py doctor
+python download_models.py --preset odysseus-default
+python -m uvicorn unified_server:app --host 0.0.0.0 --port 8101
 ```
 
-Start (lazy, port 8101, reachable remotely):
+Open `http://127.0.0.1:8101/webui`. Full guide: `pc/docs/UNIFIED-OPS.md`.
+
+**Android only** — copy/download `android/`, then:
 
 ```powershell
-.\Start-Diffusion.ps1 -Lazy -Remote
+cd android
+.\gradlew.bat :app:assembleDebug
+adb install -r app\build\outputs\apk\debug\app-debug.apk
 ```
 
-Verify: http://127.0.0.1:8101/webui — type a prompt, generate.
+Models are downloaded on the device from the in-app model catalog. Guide:
+`android/README.md`.
 
-Full install as a service + firewall + Odysseus wiring: see **INSTALL.md**.
-Operations, logs, restarts: **OPERATIONS.md**. When something breaks:
-**TROUBLESHOOTING.md**. API contract for integrations:
-**docs/ODYSSEUS-CONTRACT.md**.
+## Shared development material (not needed at runtime)
 
-## Models
+- `docs/` — architecture, checklist, checkpoints, on-device plan.
+- `testdata/` — reference image/mask/audio/video used by the test suites.
+- `pc/tools/`, `android/tests/` — end-to-end test drivers.
+- `AGENTS.md` — working rules for agents/contributors.
 
-| ID | Type | Size | Source |
-|---|---|---|---|
-| DreamShaper_8 | SD1.5 general | 2.7 GB | HF `Lykon/dreamshaper-8` (fp16 repo) |
-| AbsoluteReality_1.8 | SD1.5 photoreal | 2.0 GB | HF `Lykon/AbsoluteReality` (single file) |
-| AnimagineXL_3.1 | SDXL anime | 6.5 GB | HF `cagliostrolab/...` (single file) |
-| JuggernautXL_v9 | SDXL photoreal | 6.6 GB | HF `RunDiffusion/...` (single file) |
+## Contracts
 
-Drop your own `.safetensors` into `models/<Name>/` — the server auto-detects it
-after restart with a guessed profile (`guessed:true`); confirm the profile in
-`models.json` for permanent use (format in OPERATIONS.md). Model licenses: see
-the repo cards on HuggingFace (weights are downloaded, not part of this repo).
-
-## Performance (6 GB card, approximate)
-
-Cold load: SD1.5 ~1–3 min, SDXL ~3–6 min. Warm: 512px/low in seconds,
-1024px/high in minutes. Recommended: 768px + medium. If VRAM overflows you have
-two options: (a) smaller image/fewer steps, VRAM-only (faster, weaker), or
-(b) CPU offload spilling into RAM (better quality, much slower) — the server
-logs which `performance` preset it picked (`auto` by default).
+Both products expose the same core paths: `GET /health`, `GET /v1/models`,
+`POST /v1/images/generations|edits|inpaint|harmonize|upscale|caption`,
+`POST /v1/chat/completions`, `POST /v1/audio/transcriptions|translations`,
+`GET /v1/ffmpeg/presets`, `POST /v1/ffmpeg/{op}`, `GET /v1/settings`.
+Unimplemented features answer `503 will-not-load`, never fake success.
 
 ## Security
 
-A LAN-only tool with no authentication. The NSFW safety checker is disabled by
-default (`--disable-safety-checker` in all launchers) — do NOT expose the port
-to the internet; bind Tailscale (`100.64.0.0/10`) or your LAN subnet only.
+LAN-only, no authentication. Do not expose the ports to the internet; bind
+Tailscale or your LAN. The NSFW safety checker is disabled in the launchers.
+
+## License
+
+MIT — see `LICENSE`.

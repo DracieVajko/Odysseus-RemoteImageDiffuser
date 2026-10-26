@@ -15,10 +15,23 @@ Prism is **two independent products**:
    Every feature runs **on the phone, locally and offline**: generate, edits,
    inpaint, harmonize, upscale, caption, chat, transcribe, translate, ffmpeg.
    There is no Local/Auto/Remote switch and no remote host field.
-2. **PC server** — `unified_server.py` + `webui_unified.html`, fully separate.
+2. **PC server** — `pc/unified_server.py` + `pc/webui_unified.html`, fully
+   separate.
 
 Both expose the same OpenAI-compatible API so external AI clients can attach
 over LAN, but the Android app never depends on the PC.
+
+### Repository layout
+
+| Path | Contents |
+|---|---|
+| `pc/` | PC product: server, `unified/`, WebUI, models, tests, scripts, docs |
+| `android/` | Android product: Gradle app, native engines, tests, tools |
+| `docs/` | shared project docs (architecture, checklist, checkpoints, plan) |
+| `testdata/` | shared fixtures used by the PC/Android test drivers |
+
+A user only needs `pc/` for the PC server or `android/` for the app. Shared
+folders are development material, not runtime dependencies.
 
 If a feature cannot run on Android yet, mark it **experimental**, keep the
 endpoint honest (503 with a clear reason), and document the plan in
@@ -36,10 +49,11 @@ endpoint honest (503 with a clear reason), and document the plan in
 - Models are downloaded lazily via `ModelDownloader` (resume, staging, `.READY`
   manifest). Never bundle weights in the APK.
 - Catalog entries must have verified (HTTP 200) URLs.
-- Unload heavy models after each request to free RAM.
+- Android keeps the LCM engine resident and releases it after 10 minutes
+  without image work (one ORT run at a time); the PC unloads on idle/switch.
 - All UI text in English. All buttons must be reachable and tested.
 - The LCM UNet must be **QDQ** format (ORT Android has no `ConvInteger`).
-  Conversion script: `convert_lcm_qdq.py`.
+  Conversion script: `pc/tools/convert_lcm_qdq.py`.
 
 ## Instructions
 
@@ -48,7 +62,7 @@ endpoint honest (503 with a clear reason), and document the plan in
 - **Architecture:** `docs/ARCHITECTURE.md` — end-to-end PC and Android flow.
 - **On-device plan:** `docs/ONDEVICE-PLAN.md` — how each feature will work
   locally, effort, and order of work.
-- **Android details:** `docs/ANDROID.md`.
+- **Android details:** `android/docs/ANDROID.md`.
 - Update the checklist after every meaningful change.
 
 ## Build
@@ -56,4 +70,11 @@ endpoint honest (503 with a clear reason), and document the plan in
 ```
 cd android
 .\gradlew.bat :app:assembleDebug
+```
+
+## Run (PC)
+
+```
+cd pc
+python -m uvicorn unified_server:app --host 0.0.0.0 --port 8101
 ```

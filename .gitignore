@@ -32,6 +32,9 @@ models.json
 # C++ third-party sources (cloned by the fetch script, not in git)
 android/app/src/main/cpp/third_party/
 
+# Temporary copy for the pre-migration OdysseusDiffusion service (canonical: pc/scripts/nssm.exe)
+/nssm.exe
+
 # OS / editors
 Thumbs.db
 Desktop.ini

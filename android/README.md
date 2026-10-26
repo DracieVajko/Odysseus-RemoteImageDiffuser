@@ -42,7 +42,7 @@ android/
   app/src/main/java/eu/odysseus/diffusion/
     MainActivity.kt           # UI: Local/Remote/Auto, Start/Stop, download status
     ApiServer.kt              # Ktor routes, same paths as server :8101
-    ModelManager.kt           # single-resident gate (mirror of unified/model_manager.py)
+    ModelManager.kt           # single-resident gate (mirror of pc/unified/model_manager.py)
     ModelDownloader.kt        # lazy download stub (DownloadManager)
   contract-compat.md          # curl compatibility checklist
   README.md                   # this file
@@ -65,7 +65,7 @@ Important: **the Gradle JDK must be 17** (Android Studio → Settings → Build 
 
 ```powershell
 cd android
-powershell -ExecutionPolicy Bypass -File fetch_third_party.ps1  # whisper.cpp v1.9.5
+powershell -ExecutionPolicy Bypass -File tools/fetch_third_party.ps1  # whisper.cpp v1.9.5
 # + NDK r27 and CMake 3.22.1 via SDK Manager (ndkVersion PIN in app/build.gradle.kts)
 .\gradlew.bat :app:assembleDebug   # also builds libwhisper.so into the APK
 ```

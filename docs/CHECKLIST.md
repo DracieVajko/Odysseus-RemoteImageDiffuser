@@ -74,7 +74,7 @@ Status legend: [x] done, [~] in progress, [ ] todo, [!] experimental/blocked.
 - [x] **Save transcript** link (downloads `.txt`).
 - [x] **Stop** button for model downloads (real cancel).
 - [x] Image generation works without torch/diffusers via ONNX LCM fallback
-      (`unified/lcm_onnx_numpy.py`).
+      (`pc/unified/lcm_onnx_numpy.py`).
 - [x] Cancellation: URL downloads stop in the chunk loop, HF snapshots between
       files.
 
@@ -84,7 +84,7 @@ Status legend: [x] done, [~] in progress, [ ] todo, [!] experimental/blocked.
 - [x] **Guidance** field (1.0 = LCM; >1 enables CFG with the negative prompt).
 - [x] **Resolution dropdown** (256/512/768) + **custom WxH**.
 - [x] **Quality dropdown** (low/medium/high) + explicit steps.
-- [x] PC: ONNX LCM CFG (`unified/lcm_onnx_numpy.py`).
+- [x] PC: ONNX LCM CFG (`pc/unified/lcm_onnx_numpy.py`).
 - [x] Android: ONNX LCM CFG (`LcmOnnxEngine.generate`).
 - [x] Inpaint: image + mask + mode (add/remove/color) + strength.
 - [x] Color mode: recolor the masked region (no AI, preserves luminance).
@@ -109,13 +109,13 @@ Status legend: [x] done, [~] in progress, [ ] todo, [!] experimental/blocked.
 
 ### PC test result (2026-10-24, CUDA)
 
-`test_pc_features.py`: **31/31 passed** — health/models/catalog/settings,
+`pc/tools/test_pc_features.py`: **31/31 passed** — health/models/catalog/settings,
 txt2img (negative + guidance), custom size, img2img, inpaint add/remove/color,
 convert-image/audio/video, extract-audio, trim, info, compress, transcription,
 translation. GPU (RTX 3060) warm timings: 256/4 3–6 s, 384/6 ~9–11 s,
 512/6 ~52 s.
 
-`test_ffmpeg_presets.py`: **23/23 passed** — all 10 video, 8 audio and 5 image
+`pc/tools/test_ffmpeg_presets.py`: **23/23 passed** — all 10 video, 8 audio and 5 image
 presets.
 
 ### Android on-device test (2026-10-23)
@@ -151,7 +151,7 @@ completion; after it `busy=false, queue=0`.
 harmonize) → **20/20 OK**, PID unchanged (12393), threads 55–56, RSS 1.9–3.9 GB,
 ending 2.66 GB. No OOM, no restart.
 
-**PC concurrency:** `test_model_manager_concurrency.py` PASS — switch releases
+**PC concurrency:** `pc/tools/test_model_manager_concurrency.py` PASS — switch releases
 the old engine before the new state is visible, concurrent ensures do not
 deadlock, unload callbacks match switches.
 
@@ -211,7 +211,7 @@ bitrates.
 
 `python -m pytest tests -q` — 44 passed (2026-10-23).
 
-`test_all_endpoints.py` (repo root) — 25 checks against the Android server.
+`pc/tools/test_all_endpoints.py` (repo root) — 25 checks against the Android server.
 Last result: **25/25 passed** (before the PC-mode removal).
 
 | Area | Result |
@@ -226,7 +226,7 @@ Last result: **25/25 passed** (before the PC-mode removal).
 ### Image quality (2026-10-23)
 
 - Verified the Kotlin pipeline against a standalone numpy/onnxruntime reference
-  (`lcm_python_ref.py`). Stats match closely (mean/std/unique/sharpness), so the
+  (`pc/tools/lcm_python_ref.py`). Stats match closely (mean/std/unique/sharpness), so the
   implementation is correct.
 - 4-step LCM at 256×256 is inherently soft/blurry; the model was trained at
   512×512. Default in the UI is now **512×512 / 6 steps**.
@@ -244,7 +244,7 @@ Last result: **25/25 passed** (before the PC-mode removal).
 
 ## Docs
 
-- [x] docs/ANDROID.md
+- [x] android/docs/ANDROID.md
 - [x] docs/HANDOFF.md
 - [x] docs/CHECKLIST.md (this file)
 - [x] docs/CHECKPOINTS.md
@@ -257,9 +257,9 @@ Last result: **25/25 passed** (before the PC-mode removal).
 - [x] All Kotlin comments, docstrings, UI strings, log messages and model notes
       translated to English (0 Slovak diacritics in `android/**/*.kt`).
 - [x] All Python comments/docstrings/messages translated to English
-      (`unified_server.py`, `download_models.py`, `unified/*.py`,
-      `diffusion_server.py`, `unified_shim.py`).
-- [x] WebUI (`webui_unified.html`) is English-only.
+      (`pc/unified_server.py`, `pc/download_models.py`, `pc/unified/*.py`,
+      `pc/diffusion_server.py`, `unified_shim.py`).
+- [x] WebUI (`pc/webui_unified.html`) is English-only.
 - [x] Android layout XML and themes comments are English.
 - [x] `RemoteProxy.kt` deleted (remote mode removed).
 - [x] Docs translated to English (ANDROID, HANDOFF, UNIFIED-CONTRACT, UNIFIED-OPS).
@@ -288,10 +288,10 @@ Last result: **25/25 passed** (before the PC-mode removal).
 | Android two concurrent | `busy=true, queue=1` (verified) |
 | Android completion under concurrency | **not verified** — device detached mid-test |
 
-Test files: `test_pc_states.py` (PASS) and `test_android_states.py`
+Test files: `pc/tools/test_pc_states.py` (PASS) and `android/tests/test_android_states.py`
 (queue verified; completion re-run pending when the phone is attached).
 
-`test_android_features.py` now also asserts the Android regressions
+`android/tests/test_android_features.py` now also asserts the Android regressions
 (`n=2` → 2 distinct images, `size=256x256` + `requested_size=256x128` for a
 `256x128` request); the run is pending until the device is reattached.
 
@@ -306,7 +306,7 @@ Test files: `test_pc_states.py` (PASS) and `test_android_states.py`
 ## GPU (PC, 2026-10-24)
 
 - [x] `onnxruntime-gpu 1.31.0` + `nvidia-cudnn-cu13` installed.
-- [x] `unified/onnx_env.py`: DLL registration + provider selection
+- [x] `pc/unified/onnx_env.py`: DLL registration + provider selection
       (`auto` → CUDA → CPU; DML skipped for QDQ).
 - [x] `/health` reports `device` and `onnx_provider`.
 - [x] `release_pipeline()` frees ONNX sessions on idle/model switch.
@@ -321,7 +321,7 @@ Test files: `test_pc_states.py` (PASS) and `test_android_states.py`
 - [x] Real-ESRGAN torch architecture corrected: RRDB is sequential + 0.2
       residual, and `conv_up1/up2/hr` need LeakyReLU (previously the model
       produced garbage).
-- [x] `convert_esrgan_onnx.py` exports `RealESRGAN_x4plus.onnx` (single 67 MB
+- [x] `pc/tools/convert_esrgan_onnx.py` exports `RealESRGAN_x4plus.onnx` (single 67 MB
       file, max diff vs torch 2e-6).
 - [x] Engine order: torch → ONNX → Pillow; `PRISM_UPSCALE_ENGINE=torch|onnx|pillow`.
 - [x] Upscale is its own resident kind; switching releases the LCM pipeline,
@@ -331,7 +331,7 @@ Test files: `test_pc_states.py` (PASS) and `test_android_states.py`
 - [x] Caption/chat now work: `torch 2.14.1+cu130` + `transformers 5.20`
       + `models/SmolVLM_500M` (already downloaded).
 - [x] Measured: caption 200 (first 42 s incl. load, cached ~7 s), chat 200 ~3 s.
-- [x] `test_pc_features.py`: 37/37 (adds upscale, caption, chat + assertions).
+- [x] `pc/tools/test_pc_features.py`: 37/37 (adds upscale, caption, chat + assertions).
 
 ## Android stability (2026-10-25)
 

@@ -31,7 +31,7 @@ AI client (OpenAI-compatible), without the phone depending on the PC.
   UNet, LCM scheduler, VAE decode, Bitmap).
 - ORT Android 1.19.2/1.20.0 rejects `ConvInteger(10)` (CPU, NNAPI, XNNPACK).
 - Result: `/v1/images/generations` returns 503 `LCM engine init failed`.
-- Documented in docs/ANDROID.md; fallback to PC in Auto/Remote.
+- Documented in android/docs/ANDROID.md; fallback to PC in Auto/Remote.
 
 ## 2026-10-22 — Rename + English
 
@@ -76,7 +76,7 @@ AI client (OpenAI-compatible), without the phone depending on the PC.
 ## 2026-10-22 — Image generation works on-device
 
 - Root cause: ORT Android does not implement `ConvInteger(10)` (QOperator INT8).
-- Fix: converted the LCM UNet to QDQ format (`convert_lcm_qdq.py`):
+- Fix: converted the LCM UNet to QDQ format (`pc/tools/convert_lcm_qdq.py`):
   `DynamicQuantizeLinear + ConvInteger + Cast + Mul + Add` → `DequantizeLinear +
   Conv` (98/98 nodes converted, 0 skipped).
 - Also fixed text encoder input: `input_ids` must be **int32** (was int64).
@@ -101,7 +101,7 @@ AI client (OpenAI-compatible), without the phone depending on the PC.
 
 ## 2026-10-22 — Full endpoint test
 
-- `test_all_endpoints.py`: 25/25 checks passed on Android.
+- `pc/tools/test_all_endpoints.py`: 25/25 checks passed on Android.
 - Image gen: 256×256 ~29 s, 512×512 ~70 s, both valid PNGs.
 - Audio: transcribe 200 (27 s), translate 200 (33 s).
 - Source-dependent endpoints (edits/inpaint/harmonize/upscale/caption/chat/
@@ -126,11 +126,11 @@ AI client (OpenAI-compatible), without the phone depending on the PC.
 - WebUI console: scrollable (220 px), selectable, copy + clear.
 - Transcript: Save transcript link (`.txt` download).
 - Model downloads: real **Stop** button.
-  - `download_models.py` has `_CANCEL` + `CancelledError`.
+  - `pc/download_models.py` has `_CANCEL` + `CancelledError`.
   - URL downloads stop in the chunk loop; HF snapshots stop between files
     (per-file `hf_hub_download` instead of `snapshot_download`).
   - `models_manager.cancel` returns `cancelled: true`.
-- Image generation without torch/diffusers: `unified/lcm_onnx_numpy.py`
+- Image generation without torch/diffusers: `pc/unified/lcm_onnx_numpy.py`
   (numpy + onnxruntime, same QDQ UNet). Wired as a fallback in
   `_try_real_generation`.
   - Verified: `POST /v1/images/generations` → 200, valid PNG
@@ -140,7 +140,7 @@ AI client (OpenAI-compatible), without the phone depending on the PC.
 ## 2026-10-23 — Prompts, guidance, inpaint, FFmpeg presets
 
 - Image generation now accepts **negative prompt** + **guidance** (CFG when
-  guidance > 1) on PC (`unified/lcm_onnx_numpy.py`) and Android
+  guidance > 1) on PC (`pc/unified/lcm_onnx_numpy.py`) and Android
   (`LcmOnnxEngine.generate`).
 - Resolution: 256/512/768 + custom WxH; quality low/medium/high + steps.
 - Inpaint:
@@ -153,7 +153,7 @@ AI client (OpenAI-compatible), without the phone depending on the PC.
 - FFmpeg presets expanded: 10 video, 8 audio, 5 image; new
   `POST /v1/ffmpeg/convert-image`; WebUI Tools tab loads presets dynamically.
 - Test data added under `testdata/` (images, mask, audio, video, prompts).
-- PC test suite `test_pc_features.py`: **20/20 passed** (txt2img with
+- PC test suite `pc/tools/test_pc_features.py`: **20/20 passed** (txt2img with
   negative/guidance, custom size, img2img, inpaint add/remove/color, all FFmpeg
   ops, transcription).
 - Android build: `BUILD SUCCESSFUL`; device verification pending reconnect.
@@ -162,8 +162,8 @@ AI client (OpenAI-compatible), without the phone depending on the PC.
 
 - PC harmonize implemented (`cpu-harmonize`): mask color match + seam feather;
   no-mask mode does a mild auto-level.
-- `test_ffmpeg_presets.py`: **23/23 passed** (10 video, 8 audio, 5 image).
-- `test_pc_features.py` re-run: **20/20 passed**.
+- `pc/tools/test_ffmpeg_presets.py`: **23/23 passed** (10 video, 8 audio, 5 image).
+- `pc/tools/test_pc_features.py` re-run: **20/20 passed**.
 - WebUI default resolution changed to 512×512 to match the ONNX model.
 - Note: MP3 192/320 are capped by a 16 kHz mono source (max ~160 kbps).
 - Android harmonize implemented (`ImageOps.kt`, `engine=cpu-harmonize`);
@@ -237,7 +237,7 @@ Repo cleanup: 109 scratch/test files removed (root untracked 128 → 29).
 - **PC ModelManager race fixed:** `on_unload("switch")` now runs while the lock
   is held, so a concurrent `ensure` cannot install a new model before the old
   engine is released. `unload()` also calls the hook under the lock.
-- `test_model_manager_concurrency.py`: PASS — basic switch, release-before-new-
+- `pc/tools/test_model_manager_concurrency.py`: PASS — basic switch, release-before-new-
   state (second ensure blocked ≥0.15 s during a 0.25 s callback), 8 threads ×
   10 switches with no deadlock and `unload calls == load_count - 1`.
 - **Android state reporting:** Ktor `Monitoring` intercept tracks image/audio
@@ -256,8 +256,8 @@ Repo cleanup: 109 scratch/test files removed (root untracked 128 → 29).
 
 - Translated all Slovak comments, docstrings, UI strings, log messages and model
   notes to English across Android (Kotlin + XML), PC (Python + WebUI).
-- Verified 0 Slovak diacritics in `android/**/*.kt`, `unified/**/*.py`,
-  `unified_server.py`, `download_models.py`, `webui_unified.html`.
+- Verified 0 Slovak diacritics in `android/**/*.kt`, `pc/unified/**/*.py`,
+  `pc/unified_server.py`, `pc/download_models.py`, `pc/webui_unified.html`.
 - Deleted unused `RemoteProxy.kt` (remote mode removed).
 - Docs translated by a subagent (ANDROID, HANDOFF, UNIFIED-CONTRACT, UNIFIED-OPS).
 - Device caveat: Vivo sometimes backgrounds the activity immediately
@@ -274,9 +274,9 @@ were initialized once and never touched.
   `queue = max(0, in_flight - 1)` after every `begin()`/`end()`. The HTTP
   middleware already wraps POST `/v1/images/*`, `/v1/audio/*`, `/v1/chat/*`
   in `begin()`/`end()` with `finally`, so failures reset the state too.
-- `test_model_manager_concurrency.py` gained `test_begin_end_updates_busy_and_queue`
+- `pc/tools/test_model_manager_concurrency.py` gained `test_begin_end_updates_busy_and_queue`
   (single, nested, drain, unbalanced end) — PASS.
-- New `test_pc_states.py` against a live server — PASS:
+- New `pc/tools/test_pc_states.py` against a live server — PASS:
   | Step | Observed |
   |---|---|
   | idle | `busy=false, queue=0, in_flight=0` |
@@ -284,13 +284,13 @@ were initialized once and never touched.
   | 2 concurrent | `busy=true, queue=1, in_flight=2`, both 200 |
   | after | `busy=false, queue=0, in_flight=0` |
   | invalid inpaint (400) | state back to idle |
-- `test_pc_features.py` now asserts the earlier fixes as regressions:
+- `pc/tools/test_pc_features.py` now asserts the earlier fixes as regressions:
   `n=2` returns 2 distinct images, `quality=high` → `steps=8`, non-square
   request reports `size=320x320` + `requested_size=320x256`.
 
 ## 2026-10-23 — Android concurrent state test (partial)
 
-New `test_android_states.py` starts a 384×384 generation and an inpaint
+New `android/tests/test_android_states.py` starts a 384×384 generation and an inpaint
 concurrently against the running app.
 
 - Verified before the disconnect: `busy=true, queue=1` while both were in
@@ -301,12 +301,12 @@ concurrently against the running app.
   cable/USB drop or a process death. Re-run when the phone is attached and
   capture `adb logcat` around the test.
 - Repo: removed `test_lcm_tmp.py` and `test_android_continue.py` (scratch /
-  superseded); `test_pc_features.py` and `test_android_features.py` now write
+  superseded); `pc/tools/test_pc_features.py` and `android/tests/test_android_features.py` now write
   sample outputs to a temp directory instead of the repo root.
 
 ## 2026-10-24 — PC upscale ONNX fallback, Android NCNN/VLM skeletons
 
-**PC upscale:** `unified/upscale.py` now tries Real-ESRGAN in this order:
+**PC upscale:** `pc/unified/upscale.py` now tries Real-ESRGAN in this order:
 torch (RRDBNet) → ONNX (`RealESRGAN_x4plus.onnx`) → Pillow LANCZOS.
 Tiled inference (256×256, overlap 16) keeps VRAM low. Scale 2/3 downsample from
 native x4. DoS cap 8192px. Verified import, no model weights present → Pillow fallback.
@@ -338,15 +338,15 @@ wired in `ApiServer.kt` POST `/v1/images/caption` + `/v1/chat/completions`.
   clamped to 256–512) like Android, in `_try_real_generation`, generations
   metadata, edits and inpaint. Verified: `320x256` → `size=320x320`,
   `requested_size=320x256`.
-- `test_pc_features.py` regression section: `n=2` → 2 distinct images,
+- `pc/tools/test_pc_features.py` regression section: `n=2` → 2 distinct images,
   `quality=high` → `steps=8`, size metadata. Full suite **29/29 passed**;
-  `test_ffmpeg_presets.py` **23/23 passed**.
+  `pc/tools/test_ffmpeg_presets.py` **23/23 passed**.
 - **Language sweep:** the earlier "0 Slovak" check only looked at diacritics
   in Kotlin. `AndroidManifest.xml`, `cpp/CMakeLists.txt`,
   `cpp/whisper_jni.cpp`, `build.gradle.kts`, `ModelCatalog.kt`,
   `ModelDownloader.kt`, WebUI, `requirements.txt`, `ffmpeg_tools.py`,
   `lcm_onnx.py`, `tests/*` docstrings, the Android `.ps1` scripts,
-  `monitor_android.ps1`, `Switch-Service-ToUnified.ps1` and the archived plan
+  `android/tools/monitor_android.ps1`, `Switch-Service-ToUnified.ps1` and the archived plan
   were still Slovak; all translated. Re-scan: **0 hits**.
 - **ffmpeg two-pass log leak fixed:** `-passlogfile` points next to the
   temporary output and `os.devnull` is used; `ffmpeg2pass-0.log` no longer
@@ -359,7 +359,7 @@ wired in `ApiServer.kt` POST `/v1/images/caption` + `/v1/chat/completions`.
 Hardware: RTX 3060 Laptop 6 GB, driver 617.42, CUDA 13.4, cuDNN 9.27
 (`nvidia-cudnn-cu13` pip), `onnxruntime-gpu 1.31.0`.
 
-Provider logic (`unified/onnx_env.py`):
+Provider logic (`pc/unified/onnx_env.py`):
 - `PRISM_ONNX_PROVIDER=auto` (default): CUDA → CPU. DirectML is skipped for
   `qdq` models because DML fails in `DmlGraphFusionHelper` on the INT8 graph.
 - `cuda` / `dml` / `cpu` force a path.
@@ -450,7 +450,7 @@ missing the LeakyReLU after `conv_up1`, `conv_up2` and `conv_hr`. On a 0.5
 gray input the old model emitted ~2.2e10; the fixed model emits 0.508.
 Consequence: the torch upscale path had always produced garbage.
 
-**ONNX upscale (new):** `convert_esrgan_onnx.py` loads the `.pth` with the
+**ONNX upscale (new):** `pc/tools/convert_esrgan_onnx.py` loads the `.pth` with the
 correct key names (`conv1..conv5`, `conv_up1/2`), exports with dynamic H/W,
 inlines the external weights and validates against torch:
 `max abs diff 2e-6`, single 67 MB `RealESRGAN_x4plus.onnx`.
@@ -470,7 +470,7 @@ return real text now: caption first call 42 s (load included), cached ~7 s;
 chat ~3 s. The manager still releases the LCM pipeline before VLM and the VLM
 before generation, so only one heavy engine is resident.
 
-**Verification:** `test_pc_features.py` **37/37 passed** (adds upscale,
+**Verification:** `pc/tools/test_pc_features.py` **37/37 passed** (adds upscale,
 caption and chat with assertions), ffmpeg 23/23, states PASS, `pytest` 44.
 GPU upscale engine reported as `realesrgan-torch`.
 
