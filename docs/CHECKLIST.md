@@ -346,3 +346,20 @@ Test files: `pc/tools/test_pc_states.py` (PASS) and `android/tests/test_android_
 - [x] Load test **20/20**, PID 13108 stable, RSS 3.69–3.78 GB, threads 96.
 - [x] Warm generate 256/4 **7–10 s**, inpaint add/remove **~9 s** (was 25–33 s).
 - [x] No crash entries in logcat during the suite, load or state tests.
+
+## Repository layout (2026-10-26)
+
+- [x] PC product moved to `pc/`: server, `unified/`, WebUI, models config,
+      tests, tools, scripts, PC docs; `models/` and `models.json` live there.
+- [x] Android e2e drivers moved to `android/tests`, helper scripts to
+      `android/tools`, doc to `android/docs`.
+- [x] Root keeps `README.md`, `AGENTS.md`, `LICENSE`, `VERSION`, shared
+      `docs/` and `testdata/`; README explains PC-only vs Android-only.
+- [x] Paths updated in tests/tools/scripts/docs; `pc/pytest.ini` +
+      `pc/conftest.py` added.
+- [x] Verified: `pytest` 44 from `pc/`, e2e 37/37 from `pc/`, Android
+      `assembleDebug` OK.
+- [ ] Run `pc/scripts/migrate-service-paths.ps1` **as Administrator** to
+      repoint the `OdysseusDiffusion` service at `pc/` (until then a
+      temporary root `nssm.exe` keeps the SCM path valid; the service will
+      fail on restart because its script path is still the old root one).

@@ -478,3 +478,33 @@ GPU upscale engine reported as `realesrgan-torch`.
 graph, and the iGPU shares system memory. A non-QDQ FP16/FP32 export would be
 needed; the discrete NVIDIA GPU is the practical path on this machine.
 
+## 2026-10-26 — Repository split: pc/ and android/
+
+The repository now contains two self-contained products:
+
+```
+pc/        PC server, unified package, WebUI, models, tests, tools,
+           scripts, PC docs (models/ + models.json live here)
+android/   Gradle app, native engines, tests, tools, Android docs
+docs/      shared project docs
+testdata/  shared test fixtures
+```
+
+- Root README explains that a user only needs `pc/` or `android/`.
+- PC e2e drivers moved to `pc/tools`, pytest suite to `pc/tests`; helper
+  scripts to `pc/scripts`, legacy image-only launcher to `pc/legacy`.
+- Android e2e drivers moved to `android/tests`, helper scripts to
+  `android/tools`, doc to `android/docs`.
+- Paths in tests/tools/scripts/docs updated; `pc/pytest.ini` + `conftest.py`
+  added so the suite runs from `pc/`.
+- Verified after the move: `pytest` **44 passed** from `pc/`, e2e
+  **37/37** against the server started from `pc/`, Android
+  `assembleDebug` **BUILD SUCCESSFUL**.
+
+**Windows service:** `OdysseusDiffusion` still points at the old root paths.
+Run `pc/scripts/migrate-service-paths.ps1` as Administrator once to repoint
+the SCM binary to `pc/scripts/nssm.exe` and the app parameters to
+`pc/diffusion_server.py` + `pc/models.json`. A temporary root `nssm.exe`
+(gitignored) keeps the SCM path valid until then; the service will fail on
+restart before the migration because its script path no longer exists.
+
