@@ -320,6 +320,15 @@ def health():
         actual_model, actual_kind = VLM_ID, "vlm"
     if not actual_model and st["loaded_kind"] == "audio":
         actual_model, actual_kind = st["loaded_id"], "audio"
+    # faster-whisper weights live in _WHISPER_CACHE, not in the manager, so
+    # report what is actually resident instead of the bookkeeping kind.
+    whisper_name = ""
+    try:
+        if _WHISPER_CACHE:
+            src = str(next(iter(_WHISPER_CACHE))[0])
+            whisper_name = Path(src).name.replace("faster-whisper-", "") or src
+    except Exception:
+        whisper_name = ""
     return {
         "status": "ok",
         "model": reg.get("default_image_model", ""),
@@ -336,8 +345,9 @@ def health():
         "idle_unload_seconds": IDLE_UNLOAD_SECONDS,
         "uptime_s": round(time.time() - _START_TS, 1),
         # audio sekcia (WhisperApi kompat)
-        "audio_model": reg.get("default_audio_model", "small"),
-        "audio_loaded": st["loaded_kind"] == "audio",
+        "audio_model": whisper_name or reg.get("default_audio_model", "small"),
+        "audio_loaded": bool(whisper_name) or st["loaded_kind"] == "audio",
+        "audio_whisper_models_resident": len(_WHISPER_CACHE),
         "version": "unified-0.1.0",
     }
 

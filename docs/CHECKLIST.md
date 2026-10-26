@@ -394,3 +394,9 @@ Test files: `pc/tools/test_pc_states.py` (PASS) and `android/tests/test_android_
       `pytest` **44 passed** from `pc/`.
 - [x] 40:57 recording transcribed locally: 272 segments / 1317 words in
       539 s (CPU int8), written as `.sk.txt`, `.sk.srt`, `.sk.json`.
+- [x] `GET /health` reports the real whisper state: `audio_model` +
+      `audio_loaded` now reflect `_WHISPER_CACHE` (it holds the weights,
+      `ModelManager` only keeps bookkeeping) and a new
+      `audio_whisper_models_resident` count was added. Verified live:
+      `False/0` -> transcribe -> `True/1` -> image generate -> `False/0`,
+      so switching to an image model really releases the whisper model.

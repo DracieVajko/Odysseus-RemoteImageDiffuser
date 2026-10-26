@@ -333,7 +333,7 @@ async function refresh(){
     if (miss.length && !localStorage.getItem('hideMissing')) { w.style.display='block'; w.innerHTML = 'Missing model files: '+miss.join(', ')+' <button onclick="localStorage.setItem(\'hideMissing\',\'1\');document.getElementById(\'warn\').style.display=\'none\'" style="background:none;border:none;color:#79c0ff;cursor:pointer;font-size:11px">hide</button>'; }
     else { w.style.display='none'; }
     st.innerHTML = 'server <b class="ok">OK</b> · img models: '+imageModels.length+' · loaded: '+(h.current_model||h.model||'none (lazy)')
-      +' · audio: '+(m.default_audio_model||'?')+(h.audio_loaded?' (loaded)':'')
+      +' · audio: '+(h.audio_model||m.default_audio_model||'?')+(h.audio_loaded?' (loaded)':'')
       + (h.busy ? ' · <b class="bad">BUSY</b> (queue: '+(h.queue||0)+')' : '');
   } catch(e){ st.innerHTML = 'server <b class="bad">UNREACHABLE</b> · '+e; }
 }

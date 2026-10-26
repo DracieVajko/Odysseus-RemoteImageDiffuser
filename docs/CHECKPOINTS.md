@@ -539,3 +539,11 @@ exact JFK sentence; the 40:57 recording produced 272 segments in 539 s.
 **Port.** 8101 is still held by the legacy `OdysseusDiffusion` service, so the
 launcher detects an occupied port and starts Prism on 8102. The permanent fix
 is the Administrator migration script.
+
+**Whisper residency truth (2026-10-26).** `_WHISPER_CACHE` holds the
+faster-whisper weights, while `ModelManager` only tracks the `audio` kind, so
+`/health` used to report `audio_loaded=false` with a model in memory. It now
+reports `audio_model`, `audio_loaded` and `audio_whisper_models_resident` from
+that cache. Verified: `False/0` -> transcription -> `True/1` -> image
+generation -> `False/0`, i.e. `_release_engines` drops whisper on a model
+switch. `pytest` 44 passed after the change.
