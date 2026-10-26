@@ -16,6 +16,11 @@ python -m uvicorn unified_server:app --host 0.0.0.0 --port 8101
 
 Open `http://127.0.0.1:8101/webui`.
 
+**Easiest:** double-click `Start-Prism.bat` (in the repository root, or in
+this `pc/` folder if you downloaded only PC). It finds a Python with the
+dependencies, starts the server and opens the WebUI; if port 8101 is occupied
+by the old service it uses 8102. Stop with `Stop-Prism.bat`.
+
 Linux/macOS: `./scripts/Start-Unified.sh` (venv at `pc/.venv` or repo root `.venv`).
 
 ## GPU (optional)

@@ -363,3 +363,34 @@ Test files: `pc/tools/test_pc_states.py` (PASS) and `android/tests/test_android_
       repoint the `OdysseusDiffusion` service at `pc/` (until then a
       temporary root `nssm.exe` keeps the SCM path valid; the service will
       fail on restart because its script path is still the old root one).
+
+## Prism PC launcher and transcription (2026-10-26)
+
+- [x] WebUI renamed to **Prism** (title + header); tab order Generate,
+      Transcribe, Upscale, Caption, Inpaint, Edit, Tools, Models, Settings.
+- [x] `GET /v1/models` reports `kind` + `installed` for image/audio/upscale/vlm,
+      using the installable catalog (`models_manager.catalog()`) as the source
+      of truth, so upscale/VLM entries and the local whisper model appear.
+- [x] WebUI dropdowns are filled per kind: image models, whisper models
+      (`small (local)`, others `download on use`), upscale models. No hardcoded
+      model lists; the selected image model comes from `default_image_model`.
+- [x] Transcribe upload limit raised to 500 MB (the 41 min recording is 225 MB).
+- [x] Local `pc/models/faster-whisper-small` preferred over the HF CDN; one
+      model instance cached per (source, device, compute) and released with the
+      other engines on idle/switch.
+- [x] PyAV 19 dropped `metadata_errors`; a shim keeps faster-whisper decoding
+      working. The invalid `preprocessor_config.json` was removed.
+- [x] Whisper defaults to CPU int8 (`WHISPER_DEVICE=cuda` opts in) with an
+      automatic CUDA -> CPU fallback; this machine has no `cublas64_12.dll`.
+- [x] Long audio is transcribed in one pass (no 30 s re-splitting); splitting
+      remains for the remote `WhisperApi` path.
+- [x] One-click launchers `Start-Prism.bat` / `Stop-Prism.bat` (root and `pc/`):
+      python discovery, 8101 -> 8102 port fallback, WebUI auto-open.
+- [x] Verified live on 8102: `/v1/models` kinds = audio/image/upscale/vlm,
+      `small installed=True`, other whisper sizes `installed=False`; WebUI DOM
+      shows title Prism, 9 tabs, `small (local)`, `max 500 MB`;
+      `POST /v1/audio/transcriptions` with `testdata/audio/jfk.wav` -> 200,
+      engine `local`, exact JFK sentence (34 s including model load);
+      `pytest` **44 passed** from `pc/`.
+- [x] 40:57 recording transcribed locally: 272 segments / 1317 words in
+      539 s (CPU int8), written as `.sk.txt`, `.sk.srt`, `.sk.json`.

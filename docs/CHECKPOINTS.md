@@ -508,3 +508,34 @@ the SCM binary to `pc/scripts/nssm.exe` and the app parameters to
 (gitignored) keeps the SCM path valid until then; the service will fail on
 restart before the migration because its script path no longer exists.
 
+## Prism PC launcher and transcription model (2026-10-26)
+
+**Models contract.** `/v1/models` is the same contract for both products, so it
+now carries `kind` and `installed`. The installable catalog
+(`models_manager.catalog()`), not `build_registry`'s `missing` flag, decides
+both: image entries come from the registry, `upscale`/`vlm`/`audio` from the
+catalog, and an audio size counts as installed when
+`pc/models/faster-whisper-<name>/model.bin` exists and is larger than 50 MB.
+The WebUI therefore no longer hardcodes model lists.
+
+**Whisper device.** CTranslate2 4.x needs the CUDA 12 runtime
+(`cublas64_12.dll`, `cudnn64_9.dll`); this PC only has CUDA 13, so a
+CUDA-attached whisper model fails in the first `encode()`. Transcription
+defaults to CPU int8 (~4.5x realtime: 539 s for 40:57), which is sufficient,
+and `WHISPER_DEVICE=cuda` opts into the GPU when the CUDA 12 DLLs exist. A
+CUDA failure falls back to CPU inside the same request instead of failing it.
+
+**No splitting for the local engine.** faster-whisper already does VAD and
+30 s windowing; the old splitter used 25 s chunks with 5 s overlap and reloaded
+the model for every chunk. Long files now go through in one pass; splitting
+stays for the remote `WhisperApi` path.
+
+**Evidence.** `pytest` 44 passed from `pc/`; live server on 8102 returns
+`kind` for audio/image/upscale/vlm with `small installed=True`; the WebUI
+renders as Prism with 9 tabs, populated dropdowns and the 500 MB label;
+`POST /v1/audio/transcriptions` on `testdata/audio/jfk.wav` -> 200 with the
+exact JFK sentence; the 40:57 recording produced 272 segments in 539 s.
+
+**Port.** 8101 is still held by the legacy `OdysseusDiffusion` service, so the
+launcher detects an occupied port and starts Prism on 8102. The permanent fix
+is the Administrator migration script.

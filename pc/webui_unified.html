@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Unified Standalone WebUI</title>
+<title>Prism</title>
 <style>
 :root {
   color-scheme: dark;
@@ -52,7 +52,7 @@ canvas#maskpad { width: 100%; border-radius: 6px; border: 1px solid var(--border
 </head>
 <body>
 <header>
-<h1>Unified Standalone WebUI</h1>
+<h1>Prism</h1>
 <span id="status">connecting…</span>
 <button onclick="refresh()" style="margin-left:auto;padding:6px 12px;border-radius:6px;border:1px solid var(--border2);background:var(--panel2);color:#fff;cursor:pointer">Refresh</button>
 <button id="themeBtn" onclick="toggleTheme()" style="margin-left:auto;padding:6px 12px;border-radius:6px;border:1px solid var(--border2);background:var(--panel2);color:var(--text);cursor:pointer">Light</button>
@@ -62,17 +62,17 @@ canvas#maskpad { width: 100%; border-radius: 6px; border: 1px solid var(--border
 <div id="warn"></div>
 <div class="tabs">
 <button id="tabTxt" class="active" onclick="showTab('txt')">Generate</button>
-<button id="tabImg" onclick="showTab('img')">Edit</button>
-<button id="tabPaint" onclick="showTab('paint')">Inpaint</button>
-<button id="tabUp" onclick="showTab('up')">Upscale</button>
 <button id="tabTr" onclick="showTab('tr')">Transcribe</button>
-<button id="tabCap" onclick="showTab('cap')">Caption (VLM)</button>
-<button id="tabTools" onclick="showTab('tools')">Tools (FFmpeg)</button>
+<button id="tabUp" onclick="showTab('up')">Upscale</button>
+<button id="tabCap" onclick="showTab('cap')">Caption</button>
+<button id="tabPaint" onclick="showTab('paint')">Inpaint</button>
+<button id="tabImg" onclick="showTab('img')">Edit</button>
+<button id="tabTools" onclick="showTab('tools')">Tools</button>
 <button id="tabModels" onclick="showTab('models')">Models</button>
 <button id="tabSettings" onclick="showTab('settings')">Settings</button>
 </div>
 <label>Image model</label>
-<select id="model"><option value="">(loading…)</option></select>
+<select id="model" onchange="try{localStorage.setItem('u_model',this.value)}catch(e){}"><option value="">(loading…)</option></select>
 
 <div id="formTxt">
 <label>Prompt</label>
@@ -149,20 +149,20 @@ canvas#maskpad { width: 100%; border-radius: 6px; border: 1px solid var(--border
 <img id="upprev" class="preview" style="display:none">
 <div class="row">
 <div><label>Scale</label><select id="upscale"><option value="2" selected>2x</option><option value="3">3x</option><option value="4">4x</option></select></div>
-<div><label>Model</label><select id="upmodel"><option selected>RealESRGAN_x4v3</option></select></div>
+<div><label>Model</label><select id="upmodel"><option value="RealESRGAN_x4v3">RealESRGAN x4</option></select></div>
 </div>
 <button class="go" id="btnUp" onclick="generateUp()">Upscale</button>
 </div>
 
 <div id="formTr" style="display:none">
-<label>Audio or video file (mp3/wav/m4a/webm/mp4, max 100 MB)</label>
+<label>Audio or video file (mp3/wav/m4a/webm/mp4, max 500 MB)</label>
 <input type="file" id="trfile" accept="audio/*,video/*">
 <div class="row">
-<div><label>Whisper model (small = minimum for SK)</label><select id="trmodel"><option>tiny</option><option>base</option><option selected>small</option><option>medium</option><option>turbo</option><option>large</option></select></div>
+<div><label>Whisper model</label><select id="trmodel"><option value="small">small</option></select></div>
 <div><label>Language (empty = auto)</label><select id="trlang"><option value="">auto</option><option value="sk">sk</option><option value="cs">cs</option><option value="en">en</option></select></div>
 </div>
 <div class="row">
-<div><label><input type="checkbox" id="trsplit" checked> Auto-split long audio (>30s)</label></div>
+<div><label><input type="checkbox" id="trsplit"> Split into 30s chunks (remote WhisperApi only)</label></div>
 </div>
 <button class="go" id="btnTr" onclick="generateTr()">Transcribe</button>
 <div id="txtout">transcript appears here…</div>
@@ -276,30 +276,58 @@ async function refresh(){
     const h = await (await fetch('/health')).json();
     const m = await (await fetch('/v1/models')).json();
     MODELS = m.data || [];
-    // Android also returns audio models; the dropdown is for image models only.
-    const imageModels = MODELS.filter(x => !x.kind || x.kind === 'image');
+    const imageModels = MODELS.filter(x => x.kind === 'image');
+    const audioModels = MODELS.filter(x => x.kind === 'audio');
+    const upModels = MODELS.filter(x => x.kind === 'upscale');
     const sel = document.getElementById('model');
     const prev = sel.value;
     sel.innerHTML = '';
     for (const x of imageModels) {
       const o = document.createElement('option');
-      o.value = x.id; o.textContent = x.available === false ? x.id+' (unavailable)' : x.id;
+      o.value = x.id;
+      o.textContent = x.id + (x.installed === false ? ' (missing)' : '');
       sel.appendChild(o);
     }
-    // Populate transcription model dropdown from audio models
-    const audioModels = MODELS.filter(x => x.kind === 'audio');
+    // Transcription models: installed first, prefer small for SK.
     const trsel = document.getElementById('trmodel');
-    if (audioModels.length) {
-      const prev = trsel.value;
-      trsel.innerHTML = '';
-      for (const x of audioModels) {
-        const o = document.createElement('option');
-        o.value = x.id; o.textContent = x.id + (x.available === false ? ' (unavailable)' : '');
-        trsel.appendChild(o);
-      }
-      if (prev) trsel.value = prev;
+    const prevTr = trsel.value;
+    trsel.innerHTML = '';
+    const audioSorted = audioModels.slice().sort((a,b) => (b.installed?1:0) - (a.installed?1:0));
+    for (const x of audioSorted) {
+      const o = document.createElement('option');
+      o.value = x.id;
+      o.textContent = x.id + (x.installed ? ' (local)' : ' (download on use)');
+      trsel.appendChild(o);
     }
-    try { const saved = localStorage.getItem('u_model'); if (saved && !prev) sel.value = saved; } catch(e){}
+    if (audioModels.length) {
+      if (audioModels.some(x => x.id === prevTr)) trsel.value = prevTr;
+      else {
+        const pref = audioModels.find(x => x.id === 'small' && x.installed)
+          || audioModels.find(x => x.installed)
+          || audioModels.find(x => x.id === 'small')
+          || audioModels[0];
+        if (pref) trsel.value = pref.id;
+      }
+    }
+    // Upscale models.
+    const upsel = document.getElementById('upmodel');
+    const prevUp = upsel.value;
+    if (upModels.length) {
+      upsel.innerHTML = '';
+      for (const x of upModels) {
+        const o = document.createElement('option');
+        o.value = x.id;
+        o.textContent = x.id + (x.installed === false ? ' (missing)' : '');
+        upsel.appendChild(o);
+      }
+      if (upModels.some(x => x.id === prevUp)) upsel.value = prevUp;
+    }
+    let chosen = prev;
+    try { if (!chosen) chosen = localStorage.getItem('u_model'); } catch(e){}
+    if (!chosen || !imageModels.some(x => x.id === chosen)) {
+      chosen = m.default_image_model || (imageModels[0] && imageModels[0].id) || '';
+    }
+    if (chosen) sel.value = chosen;
     const miss = m.missing_models || [];
     const w = document.getElementById('warn');
     if (miss.length && !localStorage.getItem('hideMissing')) { w.style.display='block'; w.innerHTML = 'Missing model files: '+miss.join(', ')+' <button onclick="localStorage.setItem(\'hideMissing\',\'1\');document.getElementById(\'warn\').style.display=\'none\'" style="background:none;border:none;color:#79c0ff;cursor:pointer;font-size:11px">hide</button>'; }
@@ -514,15 +542,20 @@ async function generateTr(){
   const btn = document.getElementById('btnTr');
   const f = document.getElementById('trfile').files[0];
   if(!f){ alert('Pick an audio/video file'); return; }
+  if (f.size > 500 * 1024 * 1024) {
+    alert('File is '+(f.size/1024/1024).toFixed(0)+' MB; the limit is 500 MB.');
+    return;
+  }
   const fd = new FormData();
   fd.append('file', f);
-  fd.append('model', document.getElementById('trmodel').value);
+  const model = document.getElementById('trmodel').value || 'small';
+  fd.append('model', model);
   const lang = document.getElementById('trlang').value;
   if (lang) fd.append('language', lang);
   const split = document.getElementById('trsplit').checked;
-  if (split) fd.append('auto_split', 'true');
-  btn.disabled = true; btn.textContent = 'Transcribing… (auto-split if >30s)';
-  log('POST /v1/audio/transcriptions model='+document.getElementById('trmodel').value+' file='+f.name+' split='+split);
+  fd.append('auto_split', split ? 'true' : 'false');
+  btn.disabled = true; btn.textContent = 'Transcribing…';
+  log('POST /v1/audio/transcriptions model='+model+' file='+f.name+' ('+(f.size/1024/1024).toFixed(1)+' MB) split='+split);
   const t0 = Date.now();
   try {
     const r = await fetch('/v1/audio/transcriptions',{method:'POST',body:fd});

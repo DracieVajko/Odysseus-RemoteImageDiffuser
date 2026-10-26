@@ -3,6 +3,21 @@
 Two independent products live in this repository. You only need the folder for
 the one you want to run.
 
+## Start here (PC — server + WebUI)
+
+1. Double-click **`Start-Prism.bat`** in this folder.
+2. The browser opens the WebUI automatically.
+   - `http://127.0.0.1:8101/webui` normally.
+   - If port 8101 is still used by the old `OdysseusDiffusion` service, the
+     launcher starts Prism on **8102** and opens that URL instead.
+3. Stop it with **`Stop-Prism.bat`**.
+
+The WebUI has Generate, Edit/Inpaint, Upscale, Transcribe, Caption/Chat and
+FFmpeg tools. If a feature is not available on this machine it says so
+(503 will-not-load) instead of faking output.
+
+Android is separate: build/install `android/` (see below).
+
 | Product | Folder | What it is |
 |---|---|---|
 | **PC server + WebUI** | `pc/` | FastAPI server with an OpenAI-compatible API, ONNX/Diffusers image generation, LCM inpaint, Harmonize, Real-ESRGAN upscale, SmolVLM caption/chat, FFmpeg presets. GPU via CUDA or DirectML. |

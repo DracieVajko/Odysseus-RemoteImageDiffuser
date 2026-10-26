@@ -72,6 +72,10 @@ def _release_engines(reason: str = ""):
     except Exception:
         pass
     try:
+        release_whisper_cache()
+    except Exception:
+        pass
+    try:
         release_vlm()
     except Exception:
         pass
@@ -343,9 +347,50 @@ def list_models():
     reg = _image_registry()
     st = _manager.status()
     models = reg.get("image_models", {})
-    data = [{"id": k, "object": "model", "owned_by": "unified",
-             "available": not bool(models.get(k, {}).get("missing"))}
-            for k in sorted(models.keys())]
+    data = []
+    # The installable catalog is the source of truth for `installed` and kind;
+    # build_registry's `missing` flag is not always populated.
+    try:
+        from unified import models_manager as _mm
+        cat = {m["id"]: m for m in _mm.catalog()}
+    except Exception:
+        cat = {}
+    for k in sorted(models.keys()):
+        entry = models.get(k, {})
+        c = cat.get(k, {})
+        installed = bool(c.get("installed", not bool(entry.get("missing"))))
+        data.append({
+            "id": k, "object": "model", "owned_by": "unified",
+            "kind": c.get("kind", entry.get("kind", "image")),
+            "label": c.get("label", entry.get("label", k)),
+            "engine": c.get("engine", entry.get("engine", "")),
+            "installed": installed,
+            "available": installed,
+        })
+    # Upscale / VLM entries live in the installable catalog, not in
+    # image_models; include them with their kind so the UI can filter.
+    known = {d["id"] for d in data}
+    for m in cat.values():
+        if m.get("id") in known:
+            continue
+        data.append({
+            "id": m["id"], "object": "model", "owned_by": "unified",
+            "kind": m.get("kind", "image"),
+            "label": m.get("label", m["id"]),
+            "engine": m.get("engine", ""),
+            "installed": bool(m.get("installed")),
+            "available": bool(m.get("installed")),
+        })
+    # Audio: faster-whisper names, marked installed when the local CTranslate2
+    # model is present (pc/models/faster-whisper-<name>/model.bin).
+    for a in reg.get("audio_models", []):
+        local = HERE / "models" / f"faster-whisper-{a}" / "model.bin"
+        data.append({
+            "id": a, "object": "model", "owned_by": "unified",
+            "kind": "audio", "label": f"Whisper {a}", "engine": "faster-whisper",
+            "installed": local.is_file() and local.stat().st_size > 50 * 1024 * 1024,
+            "available": True,
+        })
     return {
         "object": "list",
         "data": data,
@@ -693,30 +738,104 @@ def chat_completions(body: dict):
 
 ALLOWED_AUDIO_EXT = {".mp3", ".mp4", ".mpeg", ".mpga", ".m4a", ".wav",
                      ".webm", ".ogg", ".flac", ".opus"}
-MAX_FILE_SIZE = 100 * 1024 * 1024
+MAX_FILE_SIZE = 500 * 1024 * 1024
 ALLOWED_WHISPER = ("tiny", "base", "small", "medium", "turbo", "large")
+
+_WHISPER_CACHE = {}
+
+
+_AV_PATCHED = False
+
+
+def _patch_av_compat():
+    """PyAV 19 removed av.open(metadata_errors=...), which faster-whisper
+    still passes. Drop the keyword instead of failing the request."""
+    global _AV_PATCHED
+    if _AV_PATCHED:
+        return
+    _AV_PATCHED = True
+    try:
+        import av
+        orig = av.open
+        def _open(*args, **kwargs):
+            kwargs.pop("metadata_errors", None)
+            return orig(*args, **kwargs)
+        av.open = _open
+    except Exception:
+        pass
+
+
+def _get_whisper_model(source, device: str, compute: str):
+    """One loaded faster-whisper model per (source, device, compute)."""
+    key = (str(source), device, compute)
+    m = _WHISPER_CACHE.get(key)
+    if m is None:
+        _patch_av_compat()
+        from faster_whisper import WhisperModel
+        m = WhisperModel(str(source), device=device, compute_type=compute)
+        _WHISPER_CACHE[key] = m
+    return m
+
+
+def release_whisper_cache() -> bool:
+    had = bool(_WHISPER_CACHE)
+    _WHISPER_CACHE.clear()
+    try:
+        import gc
+        gc.collect()
+    except Exception:
+        pass
+    return had
 
 
 def _transcribe_with_whisper(tmp_path: str, wanted: str, language):
-    from faster_whisper import WhisperModel
-    import torch
-    device = "cuda" if torch.cuda.is_available() else "cpu"
+    # CTranslate2 4.x needs the CUDA 12 runtime (cublas64_12.dll/cudnn64_9.dll).
+    # Default to CPU int8 so transcription works without those DLLs; set
+    # WHISPER_DEVICE=cuda when the CUDA 12 libraries are installed.
+    device = (os.environ.get("WHISPER_DEVICE") or "cpu").strip().lower()
+    if device not in ("cpu", "cuda"):
+        device = "cpu"
     compute = "float16" if device == "cuda" else "int8"
-    m = WhisperModel(wanted, device=device, compute_type=compute)
-    segs, info = m.transcribe(tmp_path, language=language, beam_size=1,
-                              vad_filter=True)
-    text = " ".join(s.text for s in segs).strip()
-    return text, getattr(info, "language", language)
+    # Prefer a locally downloaded CTranslate2 model (offline, no HF CDN):
+    #   pc/models/faster-whisper-<name>/model.bin
+    local = Path(__file__).resolve().parent / "models" / f"faster-whisper-{wanted}"
+    local_bin = local / "model.bin"
+    source = str(local) if (local_bin.is_file() and local_bin.stat().st_size > 50 * 1024 * 1024) else wanted
+    try:
+        m = _get_whisper_model(source, device, compute)
+        segs, info = m.transcribe(tmp_path, language=language, beam_size=1,
+                                  vad_filter=True)
+        text = " ".join(s.text for s in segs).strip()
+        return text, getattr(info, "language", language)
+    except Exception as e:
+        if device == "cuda":
+            logger.warning(f"whisper CUDA failed ({str(e)[:140]}); retrying on CPU int8")
+            m = _get_whisper_model(source, "cpu", "int8")
+            segs, info = m.transcribe(tmp_path, language=language, beam_size=1,
+                                      vad_filter=True)
+            text = " ".join(s.text for s in segs).strip()
+            return text, getattr(info, "language", language)
+        raise
 
 
 async def _transcribe_with_splitting(audio_path: Path, wanted: str, language):
-    """Transcribe with auto-splitting for long audio files."""
+    """Transcribe long audio.
+
+    faster-whisper handles long files with its own VAD, so splitting is only
+    used for the remote WhisperApi fallback (and for legacy engines).
+    """
     def _transcribe_single(path: Path, lang: Optional[str]) -> Tuple[str, str]:
         text, lang = _transcribe_with_whisper(str(path), wanted, lang)
         return text, lang
-    
+
     try:
-        # Use the audio splitter utility
+        import faster_whisper  # noqa: F401
+        return _transcribe_single(audio_path, language)
+    except ImportError:
+        pass
+
+    try:
+        # Use the audio splitter utility (remote service path)
         from unified.audio_splitter import transcribe_with_splitting
         text, lang = await transcribe_with_splitting(audio_path, _transcribe_single, language)
         return text, lang
@@ -777,6 +896,7 @@ async def transcriptions(
         _manager.ensure("audio", wanted)
     except ModelLoadingError as e:
         return _raise_loading(e)
+    logger.info(f"transcribe: {len(content)} bytes, model={wanted}, lang={language}")
     import tempfile
     tmp = None
     try:
@@ -785,6 +905,7 @@ async def transcriptions(
             t.write(content)
         try:
             split_enabled = auto_split.lower() in ("true", "1", "yes", "on")
+            logger.info(f"transcribe: starting engine (split={split_enabled})")
             if split_enabled:
                 text, lang = await _transcribe_with_splitting(Path(tmp), wanted, language)
             else:
