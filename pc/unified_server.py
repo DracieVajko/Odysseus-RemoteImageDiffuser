@@ -362,7 +362,10 @@ def list_models():
     # build_registry's `missing` flag is not always populated.
     try:
         from unified import models_manager as _mm
-        cat = {m["id"]: m for m in _mm.catalog()}
+    except Exception:
+        _mm = None
+    try:
+        cat = {m["id"]: m for m in _mm.catalog()} if _mm else {}
     except Exception:
         cat = {}
     for k in sorted(models.keys()):
@@ -376,9 +379,39 @@ def list_models():
             "engine": c.get("engine", entry.get("engine", "")),
             "installed": installed,
             "available": installed,
+            "size_mb": c.get("size_mb", 0),
+            "install_state": c.get("install_state", "idle"),
+            "install_progress": c.get("install_progress", 0),
+            "downloadable": bool(c),
+            "has_source": bool(c),
         })
-    # Upscale / VLM entries live in the installable catalog, not in
-    # image_models; include them with their kind so the UI can filter.
+    # Audio: faster-whisper names. The installable manager is the single source
+    # of truth (exact model.bin size + valid config.json), so an incomplete
+    # download never looks installed and the UI can offer a real button.
+    # NOTE: base the list on reg["audio_models"] (the supported sizes), not on
+    # the catalog, so an entry is never added twice.
+    for a in reg.get("audio_models", []):
+        entry = {}
+        if _mm is not None:
+            try:
+                entry = _mm.whisper_entry(a)
+            except Exception:
+                entry = {}
+        data.append({
+            "id": a, "object": "model", "owned_by": "unified",
+            "kind": "audio",
+            "label": entry.get("label", f"Whisper {a}"),
+            "engine": "faster-whisper",
+            "installed": bool(entry.get("installed")),
+            "available": True,
+            "size_mb": entry.get("size_mb", 0),
+            "install_state": entry.get("install_state", "idle"),
+            "install_progress": entry.get("install_progress", 0),
+            "downloadable": bool(entry),
+            "has_source": bool(entry),
+        })
+    # Remaining catalog entries (upscale/VLM, plus any audio id not in
+    # reg["audio_models"]) that are not already listed.
     known = {d["id"] for d in data}
     for m in cat.values():
         if m.get("id") in known:
@@ -390,16 +423,9 @@ def list_models():
             "engine": m.get("engine", ""),
             "installed": bool(m.get("installed")),
             "available": bool(m.get("installed")),
-        })
-    # Audio: faster-whisper names, marked installed when the local CTranslate2
-    # model is present (pc/models/faster-whisper-<name>/model.bin).
-    for a in reg.get("audio_models", []):
-        local = HERE / "models" / f"faster-whisper-{a}" / "model.bin"
-        data.append({
-            "id": a, "object": "model", "owned_by": "unified",
-            "kind": "audio", "label": f"Whisper {a}", "engine": "faster-whisper",
-            "installed": local.is_file() and local.stat().st_size > 50 * 1024 * 1024,
-            "available": True,
+            "size_mb": m.get("size_mb", 0),
+            "install_state": m.get("install_state", "idle"),
+            "install_progress": m.get("install_progress", 0),
         })
     return {
         "object": "list",
@@ -808,9 +834,22 @@ def _transcribe_with_whisper(tmp_path: str, wanted: str, language):
     compute = "float16" if device == "cuda" else "int8"
     # Prefer a locally downloaded CTranslate2 model (offline, no HF CDN):
     #   pc/models/faster-whisper-<name>/model.bin
+    # whisper_installed() checks the exact expected size + a valid config.json,
+    # so a half-finished download is never loaded as if it were complete.
     local = Path(__file__).resolve().parent / "models" / f"faster-whisper-{wanted}"
-    local_bin = local / "model.bin"
-    source = str(local) if (local_bin.is_file() and local_bin.stat().st_size > 50 * 1024 * 1024) else wanted
+    try:
+        from unified.models_manager import whisper_installed
+        use_local = whisper_installed(wanted)
+    except Exception:
+        local_bin = local / "model.bin"
+        use_local = local_bin.is_file() and local_bin.stat().st_size > 50 * 1024 * 1024
+    if not use_local:
+        local_bin = local / "model.bin"
+        if local_bin.is_file():
+            logger.warning(
+                f"whisper '{wanted}' is not fully downloaded "
+                f"({local_bin.stat().st_size} B); will use the HF download")
+    source = str(local) if use_local else wanted
     try:
         m = _get_whisper_model(source, device, compute)
         segs, info = m.transcribe(tmp_path, language=language, beam_size=1,

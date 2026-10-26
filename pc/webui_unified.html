@@ -7,8 +7,8 @@
 <style>
 :root {
   color-scheme: dark;
-  --bg: var(--bg); --panel: var(--panel); --panel2: var(--panel2); --input: var(--input);
-  --text: var(--text); --muted: var(--muted); --border: var(--border); --border2: var(--border2);
+  --bg: #0d1117; --panel: #161b22; --panel2: #21262d; --input: #0d1117;
+  --text: #e6edf3; --muted: #8b949e; --border: #30363d; --border2: #3d444d;
 }
 :root.light {
   color-scheme: light;
@@ -24,12 +24,18 @@ main { display: grid; grid-template-columns: 400px 1fr; gap: 16px; padding: 16px
 @media (max-width: 900px) { main { grid-template-columns: 1fr; } }
 .panel { background: var(--panel); border: 1px solid var(--border); border-radius: 8px; padding: 14px; }
 .tabs { display: flex; gap: 6px; margin-bottom: 12px; flex-wrap: wrap; }
-.tabs button { flex: 1; min-width: 70px; padding: 8px 4px; font-size: 12px; border-radius: 6px; border: 1px solid var(--border2); background: var(--panel2); color: #fff; cursor: pointer; }
+.tabs button { flex: 1; min-width: 70px; padding: 8px 4px; font-size: 12px; border-radius: 6px; border: 1px solid var(--border2); background: var(--panel2); color: var(--text); cursor: pointer; }
 .tabs button.active { background: #2f81f7; border-color: #2f81f7; }
 label { display: block; font-size: 13px; margin: 10px 0 4px; color: var(--muted); }
-input[type=text], textarea, select { width: 100%; box-sizing: border-box; background: var(--input); color: #fff; border: 1px solid var(--border2); border-radius: 6px; padding: 8px; }
+input[type=text], input[type=number], textarea, select { width: 100%; box-sizing: border-box; background: var(--input); color: var(--text); border: 1px solid var(--border2); border-radius: 6px; padding: 8px; }
+select option { background: var(--panel); color: var(--text); }
 textarea { min-height: 70px; resize: vertical; }
 .row { display: flex; gap: 8px; flex-wrap: wrap; align-items: flex-start; } .row > div { flex: 1; min-width: 120px; }
+.modelrow { display: flex; gap: 8px; align-items: center; }
+.modelrow select { flex: 1; min-width: 0; }
+button.dl { padding: 8px 10px; font-size: 12px; border-radius: 6px; border: 1px solid var(--border2); background: #1f6feb; color: #fff; cursor: pointer; white-space: nowrap; }
+button.dl:disabled { opacity: .55; cursor: wait; }
+.hint { font-size: 11px; color: var(--muted); margin-top: 4px; }
 button.go { width: 100%; margin-top: 12px; padding: 10px; font-size: 15px; border: 0; border-radius: 6px; background: #238636; color: #fff; cursor: pointer; }
 button.go:disabled { opacity: .5; cursor: wait; }
 #warn { background: #5a2d0c; border: 1px solid #a35c00; border-radius: 6px; padding: 8px 10px; font-size: 13px; margin-bottom: 10px; display: none; }
@@ -71,8 +77,14 @@ canvas#maskpad { width: 100%; border-radius: 6px; border: 1px solid var(--border
 <button id="tabModels" onclick="showTab('models')">Models</button>
 <button id="tabSettings" onclick="showTab('settings')">Settings</button>
 </div>
+<div id="imagemodelwrap">
 <label>Image model</label>
-<select id="model" onchange="try{localStorage.setItem('u_model',this.value)}catch(e){}"><option value="">(loading…)</option></select>
+<div class="modelrow">
+<select id="model" onchange="try{localStorage.setItem('u_model',this.value)}catch(e){}; syncDownloads()"><option value="">(loading…)</option></select>
+<button class="dl" id="dlImage" onclick="downloadSelected('image')" style="display:none">Download</button>
+</div>
+<div class="hint" id="dlImageHint"></div>
+</div>
 
 <div id="formTxt">
 <label>Prompt</label>
@@ -149,7 +161,7 @@ canvas#maskpad { width: 100%; border-radius: 6px; border: 1px solid var(--border
 <img id="upprev" class="preview" style="display:none">
 <div class="row">
 <div><label>Scale</label><select id="upscale"><option value="2" selected>2x</option><option value="3">3x</option><option value="4">4x</option></select></div>
-<div><label>Model</label><select id="upmodel"><option value="RealESRGAN_x4v3">RealESRGAN x4</option></select></div>
+<div><label>Model</label><div class="modelrow"><select id="upmodel" onchange="try{localStorage.setItem('u_upmodel',this.value)}catch(e){}; syncDownloads()"><option value="RealESRGAN_x4v3">RealESRGAN x4</option></select><button class="dl" id="dlUpscale" onclick="downloadSelected('upscale')" style="display:none">Download</button></div><div class="hint" id="dlUpscaleHint"></div></div>
 </div>
 <button class="go" id="btnUp" onclick="generateUp()">Upscale</button>
 </div>
@@ -158,7 +170,7 @@ canvas#maskpad { width: 100%; border-radius: 6px; border: 1px solid var(--border
 <label>Audio or video file (mp3/wav/m4a/webm/mp4, max 500 MB)</label>
 <input type="file" id="trfile" accept="audio/*,video/*">
 <div class="row">
-<div><label>Whisper model</label><select id="trmodel"><option value="small">small</option></select></div>
+<div><label>Whisper model</label><div class="modelrow"><select id="trmodel" onchange="try{localStorage.setItem('u_trmodel',this.value)}catch(e){}; syncDownloads()"><option value="small">small</option></select><button class="dl" id="dlAudio" onclick="downloadSelected('audio')" style="display:none">Download</button></div><div class="hint" id="dlAudioHint"></div></div>
 <div><label>Language (empty = auto)</label><select id="trlang"><option value="">auto</option><option value="sk">sk</option><option value="cs">cs</option><option value="en">en</option></select></div>
 </div>
 <div class="row">
@@ -203,7 +215,7 @@ canvas#maskpad { width: 100%; border-radius: 6px; border: 1px solid var(--border
 <label>Installed / available models</label>
 <div class="row" style="margin-bottom:8px">
 <div><button class="go" style="margin-top:0" onclick="loadCatalog()">Refresh catalog</button></div>
-<div><button class="go" style="margin-top:0;background:#1f6feb" onclick="installMissing()">Install all missing</button></div>
+<div><button class="go" style="margin-top:0;background:#1f6feb" onclick="installMissing()">Download all missing</button></div>
 </div>
 <div id="modelList"></div>
 
@@ -260,6 +272,10 @@ async function cancelModel(id){ try { await fetch('/v1/models/cancel',{method:'P
 function saveTranscript(){ const t=document.getElementById('txtout').textContent||''; const blob=new Blob([t],{type:'text/plain'}); const a=document.createElement('a'); a.href=URL.createObjectURL(blob); a.download='transcript_'+Date.now()+'.txt'; a.click(); }
 const TABS = ['txt','img','paint','up','tr','cap','tools','models','settings'];
 function showTab(t){ if(t==='models'){ loadCatalog(); loadCustom(); } if(t==='settings') loadSettings(); if(t==='tools') refreshToolPresets();
+  // The image model selector only applies to the image tabs; showing it on
+  // Transcribe/Upscale/Caption made those tabs look like they used image models.
+  const imw = document.getElementById('imagemodelwrap');
+  if (imw) imw.style.display = (t==='txt'||t==='img'||t==='paint') ? 'block' : 'none';
   for (const x of TABS) {
     document.getElementById('tab'+x[0].toUpperCase()+x.slice(1)).classList.toggle('active', x===t);
     document.getElementById('form'+x[0].toUpperCase()+x.slice(1)).style.display = x===t?'block':'none';
@@ -270,6 +286,87 @@ function previewRef(inp, id){
   const img = document.getElementById(id);
   img.src = URL.createObjectURL(f); img.style.display='block';
 }
+function sizeLabel(x){
+  const mb = x && x.size_mb;
+  if (!mb) return '';
+  return mb >= 1024 ? (mb/1024).toFixed(1)+' GB' : mb+' MB';
+}
+function modelById(id){ return MODELS.find(x => x.id === id); }
+function fillSelect(sel, items, kind){
+  if (!sel) return;
+  const prev = sel.value;
+  sel.innerHTML = '';
+  for (const x of items) {
+    const o = document.createElement('option');
+    o.value = x.id;
+    const size = sizeLabel(x);
+    let suffix;
+    if (x.install_state === 'downloading') suffix = ' — downloading '+(x.install_progress||0)+'%';
+    else if (x.installed) suffix = ' (local)';
+    else suffix = size ? ' — '+size+', not installed' : ' (not installed)';
+    o.textContent = x.id + suffix;
+    sel.appendChild(o);
+  }
+  if (prev && items.some(x => x.id === prev)) sel.value = prev;
+  else if (items.length) sel.value = items[0].id;
+  return sel.value;
+}
+function syncDownloads(){
+  const map = [['image','model','dlImage','dlImageHint'],
+               ['audio','trmodel','dlAudio','dlAudioHint'],
+               ['upscale','upmodel','dlUpscale','dlUpscaleHint']];
+  for (const spec of map) {
+    const sel = document.getElementById(spec[1]);
+    const btn = document.getElementById(spec[2]);
+    const hint = document.getElementById(spec[3]);
+    if (!sel || !btn || !hint) continue;
+    const m = modelById(sel.value);
+    if (!m) { btn.style.display='none'; hint.textContent=''; continue; }
+    const size = sizeLabel(m);
+    if (m.install_state === 'downloading') {
+      btn.style.display='inline-block'; btn.disabled = true;
+      btn.textContent = (m.install_progress||0)+'%';
+      hint.textContent = 'Downloading '+m.id+'… '+(m.install_progress||0)+'%'+(size?' of '+size:'');
+    } else if (m.installed) {
+      btn.style.display='none'; btn.disabled = false; btn.textContent='Download';
+      hint.textContent = '';
+    } else {
+      btn.style.display='inline-block'; btn.disabled = false; btn.textContent='Download';
+      hint.textContent = m.id+' is not installed'+(size?' ('+size+')':'')+'. Download it, otherwise the first request has to fetch it from the internet.';
+    }
+  }
+}
+async function downloadSelected(kind){
+  const selId = {image:'model', audio:'trmodel', upscale:'upmodel'}[kind];
+  const btnId = {image:'dlImage', audio:'dlAudio', upscale:'dlUpscale'}[kind];
+  const sel = document.getElementById(selId);
+  const id = sel && sel.value;
+  if (!id) return;
+  const btn = document.getElementById(btnId);
+  if (btn) { btn.disabled = true; btn.textContent = 'starting…'; }
+  log('download '+id+' ('+kind+')');
+  try {
+    const r = await fetch('/v1/models/install',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({id})});
+    const j = await r.json();
+    if (!r.ok) {
+      log('download ERROR '+r.status+': '+JSON.stringify(j).slice(0,300));
+      alert('Download failed: '+(j.error||r.status));
+      return;
+    }
+    pollModels();
+  } catch(e) {
+    log('download error: '+e);
+    if (btn) { btn.disabled = false; btn.textContent = 'Download'; }
+  }
+}
+let modelTimer = null;
+function pollModels(){
+  refresh();
+  clearTimeout(modelTimer);
+  modelTimer = setTimeout(() => {
+    if (MODELS.some(m => m.install_state === 'downloading')) pollModels();
+  }, 2500);
+}
 async function refresh(){
   const st = document.getElementById('status');
   try {
@@ -279,28 +376,26 @@ async function refresh(){
     const imageModels = MODELS.filter(x => x.kind === 'image');
     const audioModels = MODELS.filter(x => x.kind === 'audio');
     const upModels = MODELS.filter(x => x.kind === 'upscale');
+    // Image models: keep the saved/default choice.
     const sel = document.getElementById('model');
     const prev = sel.value;
-    sel.innerHTML = '';
-    for (const x of imageModels) {
-      const o = document.createElement('option');
-      o.value = x.id;
-      o.textContent = x.id + (x.installed === false ? ' (missing)' : '');
-      sel.appendChild(o);
+    fillSelect(sel, imageModels, 'image');
+    let chosen = prev;
+    try { if (!chosen) chosen = localStorage.getItem('u_model'); } catch(e){}
+    if (!chosen || !imageModels.some(x => x.id === chosen)) {
+      chosen = m.default_image_model || (imageModels[0] && imageModels[0].id) || '';
     }
+    if (chosen) sel.value = chosen;
     // Transcription models: installed first, prefer small for SK.
     const trsel = document.getElementById('trmodel');
     const prevTr = trsel.value;
-    trsel.innerHTML = '';
     const audioSorted = audioModels.slice().sort((a,b) => (b.installed?1:0) - (a.installed?1:0));
-    for (const x of audioSorted) {
-      const o = document.createElement('option');
-      o.value = x.id;
-      o.textContent = x.id + (x.installed ? ' (local)' : ' (download on use)');
-      trsel.appendChild(o);
-    }
+    fillSelect(trsel, audioSorted, 'audio');
+    let savedTr = '';
+    try { savedTr = localStorage.getItem('u_trmodel') || ''; } catch(e){}
     if (audioModels.length) {
-      if (audioModels.some(x => x.id === prevTr)) trsel.value = prevTr;
+      if (prevTr && audioModels.some(x => x.id === prevTr)) trsel.value = prevTr;
+      else if (savedTr && audioModels.some(x => x.id === savedTr)) trsel.value = savedTr;
       else {
         const pref = audioModels.find(x => x.id === 'small' && x.installed)
           || audioModels.find(x => x.installed)
@@ -311,23 +406,12 @@ async function refresh(){
     }
     // Upscale models.
     const upsel = document.getElementById('upmodel');
-    const prevUp = upsel.value;
-    if (upModels.length) {
-      upsel.innerHTML = '';
-      for (const x of upModels) {
-        const o = document.createElement('option');
-        o.value = x.id;
-        o.textContent = x.id + (x.installed === false ? ' (missing)' : '');
-        upsel.appendChild(o);
-      }
-      if (upModels.some(x => x.id === prevUp)) upsel.value = prevUp;
-    }
-    let chosen = prev;
-    try { if (!chosen) chosen = localStorage.getItem('u_model'); } catch(e){}
-    if (!chosen || !imageModels.some(x => x.id === chosen)) {
-      chosen = m.default_image_model || (imageModels[0] && imageModels[0].id) || '';
-    }
-    if (chosen) sel.value = chosen;
+    fillSelect(upsel, upModels, 'upscale');
+    try {
+      const savedUp = localStorage.getItem('u_upmodel');
+      if (savedUp && upModels.some(x => x.id === savedUp)) upsel.value = savedUp;
+    } catch(e){}
+    syncDownloads();
     const miss = m.missing_models || [];
     const w = document.getElementById('warn');
     if (miss.length && !localStorage.getItem('hideMissing')) { w.style.display='block'; w.innerHTML = 'Missing model files: '+miss.join(', ')+' <button onclick="localStorage.setItem(\'hideMissing\',\'1\');document.getElementById(\'warn\').style.display=\'none\'" style="background:none;border:none;color:#79c0ff;cursor:pointer;font-size:11px">hide</button>'; }
@@ -820,13 +904,17 @@ async function uninstallModel(id){
   } catch(e){ log('uninstall error: '+e); }
 }
 async function installMissing(){
-  for (const m of CATALOG) {
-    if (!m.installed && m.install_state !== 'downloading') await installModel(m.id);
-  }
+  const missing = CATALOG.filter(m => !m.installed && m.install_state !== 'downloading' && m.has_source !== false);
+  if (!missing.length) { alert('Every catalog model is already installed.'); return; }
+  const total = missing.reduce((s,m) => s + (m.size_gb||0), 0);
+  const names = missing.map(m => '• '+m.id+' ('+(m.size_mb ? m.size_mb+' MB' : fmtGb(m.size_gb))+')').join('\n');
+  if (!confirm('Download '+missing.length+' model(s), about '+total.toFixed(1)+' GB?\n\n'+names)) return;
+  for (const m of missing) await installModel(m.id);
 }
 let catalogTimer = null;
 function pollCatalog(){
   loadCatalog();
+  refresh();
   clearTimeout(catalogTimer);
   catalogTimer = setTimeout(() => {
     if (CATALOG.some(m => m.install_state === 'downloading')) pollCatalog();

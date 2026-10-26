@@ -547,3 +547,31 @@ reports `audio_model`, `audio_loaded` and `audio_whisper_models_resident` from
 that cache. Verified: `False/0` -> transcription -> `True/1` -> image
 generation -> `False/0`, i.e. `_release_engines` drops whisper on a model
 switch. `pytest` 44 passed after the change.
+
+## Prism WebUI dropdown root cause (2026-10-26)
+
+**Cause:** the stylesheet declared `--bg: var(--bg)` (and the same for every
+other token) in `:root`, i.e. each custom property referenced itself. Invalid
+at computed-value time, so `background: var(--panel)` and `color: var(--text)`
+resolved to nothing: the page fell back to a white background while inputs
+still hardcoded `color: #fff`. That is why the selects looked empty and
+oversized. Fixed by declaring the real dark palette and by using
+`var(--text)` in inputs/buttons.
+
+**Cause of "image models under Transcribe":** the single `#model` select sat
+outside the per-tab forms, so it was visible on every tab. It now lives in
+`#imagemodelwrap`, shown only for the image tabs.
+
+**Cause of duplicate options:** `/v1/models` appended the whisper sizes twice
+(once from `image_registry()["audio_models"]`, once from the installable
+catalog, which now also contains them). The registry loop owns the audio list
+and the catalog loop only adds ids that are not listed yet.
+
+**Downloads.** A model without a verified source gets no button. Only repos
+that answered HTTP 200 with a known `content-length` are in `WHISPER_SOURCES`,
+each file with its exact byte size; `Systran/faster-whisper-large-v3-turbo`
+answers 401, so `turbo` uses `deepdml/faster-whisper-large-v3-turbo-ct2` with a
+pinned sha256. Installed state is derived from the files (exact `model.bin`
+size, parseable `config.json`, existing `tokenizer.json`), never from a flag,
+so an aborted download cannot look complete. Verified with a fresh 77 MB
+`tiny` install (10 s) and an uninstall.

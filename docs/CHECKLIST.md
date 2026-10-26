@@ -400,3 +400,32 @@ Test files: `pc/tools/test_pc_states.py` (PASS) and `android/tests/test_android_
       `audio_whisper_models_resident` count was added. Verified live:
       `False/0` -> transcribe -> `True/1` -> image generate -> `False/0`,
       so switching to an image model really releases the whisper model.
+
+## Prism WebUI model dropdowns and downloads (2026-10-26)
+
+- [x] Root cause of the broken dropdowns: `:root` redefined its own tokens
+      (`--bg: var(--bg)`, ...), so every variable resolved to nothing. The page
+      had no dark palette and inputs were white text on a white background.
+      Replaced with a real palette; inputs and buttons now use `var(--text)`.
+- [x] `/v1/models` added every whisper size twice (registry loop + catalog
+      loop), which produced 12 options in one dropdown. Deduplicated: the
+      audio list comes from `audio_models` with catalog metadata, and the
+      catalog loop now only adds what is still missing.
+- [x] The image-model selector is only rendered on Generate/Edit/Inpaint. It
+      used to sit above every tab, so Transcribe looked like it used image
+      models.
+- [x] Model selects are filled per kind and show state + size
+      (`turbo (local)`, `medium - 1.5 GB, not installed`). The chosen
+      image/whisper/upscale model is remembered in localStorage.
+- [x] Download buttons: a Download button next to each select when the chosen
+      model is not installed, and Install/Uninstall/Stop per model in the
+      Models tab (whisper sizes included).
+- [x] Whisper downloads use a verified manifest (repo + exact size per file),
+      resume in 1 MB chunks across huggingface.co and hf-mirror.com, skip no
+      files silently, and only report installed when `model.bin` matches its
+      exact size and `tokenizer.json` exists. `turbo` also verifies sha256.
+- [x] Verified: fresh `tiny` install (77 MB) finished in ~10 s with progress
+      17 -> 43 -> 71 -> 95 -> 100 and state `done`; uninstall removed the
+      directory; `turbo` (1.62 GB) works through the API.
+- [x] `/v1/models` has no duplicate ids: 5 image, 6 audio, 1 upscale, 1 vlm,
+      each with `size_mb`, `install_state` and `installed`.
