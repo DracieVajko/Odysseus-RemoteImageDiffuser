@@ -31,18 +31,10 @@ def init_diffusion_engine() -> bool:
         return False
     try:
         import diffusion_server as ds
-        if getattr(ds, "_args", None) is None:
-            ds._args = argparse.Namespace(
-                model="", lazy=True, models_json="", default_model="",
-                steps=25, guidance_scale=7.0, width=768, height=768,
-                dtype="float16", pipeline="StableDiffusionPipeline",
-                attention_slicing=True, vae_slicing=True, cpu_offload=False,
-                harmonize_gpu=None, negative_prompt="", single_file_config="",
-                disable_safety_checker=True, performance="auto",
-                lora=None, lora_scale=1.0, host="127.0.0.1", port=8101,
-                allowed_host=[], allowed_origin="",
-            )
-        ds._init_lazy()
+        # diffusion_server owns the argparse defaults for embedded use, so the
+        # registry is initialised through one code path (no second Namespace
+        # that can drift out of sync with the CLI).
+        ds.ensure_registry()
         _inited = True
         return True
     except Exception as e:

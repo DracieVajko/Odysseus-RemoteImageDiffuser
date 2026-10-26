@@ -238,6 +238,25 @@ class InpaintRequest(BaseModel):
     request_id: Optional[str] = ""
 
 
+class OutpaintRequest(BaseModel):
+    """Expand the canvas and generate the new border with the inpaint engine."""
+    image: str = ""
+    prompt: str = ""
+    negative_prompt: str = ""
+    model: Optional[str] = ""
+    # Pixels per side; `margin` (fraction of the shorter side) is used for the
+    # sides that are left at 0.
+    left: int = 0
+    right: int = 0
+    top: int = 0
+    bottom: int = 0
+    margin: float = 0.0
+    guidance: float = 1.0
+    strength: float = 0.99
+    steps: int = 6
+    request_id: Optional[str] = ""
+
+
 class HarmonizeRequest(BaseModel):
     image: str = ""
     prompt: str = ""
@@ -462,7 +481,12 @@ def _resolve_image_model(requested):
 
 
 def _try_real_generation(model_id, prompt, size, quality, negative_prompt="", guidance=1.0, seed=1):
-    """Try torch diffusers, then the ONNX LCM pipeline. None = placeholder."""
+    """Try torch diffusers, then the ONNX LCM pipeline.
+
+    Returns (b64, engine) so the response never hides which engine produced the
+    pixels; (None, "") means the caller has to use a placeholder.
+    """
+    last_err = ""
     try:
         import diffusion_server as ds
         req_id = f"unified-{uuid.uuid4().hex[:8]}"
@@ -479,9 +503,10 @@ def _try_real_generation(model_id, prompt, size, quality, negative_prompt="", gu
         out = ds._generate_locked(req)
         imgs = out.get("data", [])
         if imgs and imgs[0].get("b64_json"):
-            return imgs[0]["b64_json"]
+            return imgs[0]["b64_json"], "diffusers"
     except Exception as e:
-        logger.warning(f"real generation fallback: {str(e)[:160]}")
+        last_err = str(e)[:160]
+        logger.warning(f"real generation fallback: {last_err}")
 
     # ONNX LCM fallback (no torch/diffusers required)
     try:
@@ -497,10 +522,11 @@ def _try_real_generation(model_id, prompt, size, quality, negative_prompt="", gu
             steps = 8 if q == "high" else (6 if q == "medium" else 4)
             return generate_b64(d, prompt, negative_prompt=negative_prompt,
                                 guidance=float(guidance or 1.0), size=side,
-                                steps=steps, seed=seed)
+                                steps=steps, seed=seed), "onnx-lcm"
     except Exception as e:
+        last_err = f"{last_err} | onnx: {str(e)[:120]}"
         logger.warning(f"onnx generation fallback failed: {str(e)[:200]}")
-    return None
+    return None, (f"failed: {last_err}" if last_err else "")
 
 
 @app.post("/v1/images/generations")
@@ -514,14 +540,17 @@ def generations(req: GenRequest):
     _release_vlm_best_effort()
     n = max(1, min(4, req.n or 1))
     data = []
+    engines = []
     for i in range(n):
-        b64 = _try_real_generation(model_id, req.prompt, req.size or "768x768",
-                                   req.quality or "medium",
-                                   req.negative_prompt, req.guidance,
-                                   seed=int(time.time()) + i * 7919)
+        b64, engine = _try_real_generation(model_id, req.prompt, req.size or "768x768",
+                                           req.quality or "medium",
+                                           req.negative_prompt, req.guidance,
+                                           seed=int(time.time()) + i * 7919)
         if not b64:
             b64 = _placeholder_png_b64()
+            engine = engine or "placeholder"
         data.append({"b64_json": b64})
+        engines.append(engine)
     try:
         w, h = (req.size or "768x768").lower().split("x")
         side = max(256, min(512, max(int(w), int(h))))
@@ -529,14 +558,25 @@ def generations(req: GenRequest):
         side = 512
     q = (req.quality or "medium").lower()
     steps = 8 if q == "high" else (6 if q == "medium" else 4)
+    # Report the size of the image that was actually produced (the torch path
+    # honours the request, the ONNX fallback generates a square at `side`).
+    real_size = f"{side}x{side}"
+    try:
+        from PIL import Image as _Image
+        _im = _Image.open(io.BytesIO(base64.b64decode(data[0]["b64_json"])))
+        real_size = f"{_im.width}x{_im.height}"
+    except Exception:
+        pass
     return {
         "created": int(time.time()),
         "data": data,
         "request_id": rid,
-        "size": f"{side}x{side}",
+        "size": real_size,
         "requested_size": req.size or "768x768",
         "quality": q,
         "steps": steps,
+        "engine": engines[0] if len(set(engines)) == 1 else "mixed",
+        "engines": engines,
     }
 
 
@@ -558,13 +598,35 @@ async def edits(
     except ModelLoadingError as e:
         return _raise_loading(e)
     _release_vlm_best_effort()
-    # img2img: ONNX LCM pipeline if available, otherwise placeholder
+    # img2img: prefer the selected diffusion model (honours the requested size
+    # and actually uses the model the user picked), then the ONNX LCM engine.
     raw = await image.read()
     b64 = None
+    engine = None
+    if raw:
+        try:
+            import diffusion_server as ds
+            try:
+                _w, _h = size.lower().split("x")
+                _pixels = int(_w) * int(_h)
+            except Exception:
+                _pixels = 0
+            with ds._tracked_model_lock():
+                ds.ensure_model_loaded(model_id, _pixels)
+                res = await ds._run_edit(prompt or "edit", raw, 1, size, quality,
+                                         strength, "b64_json", rid)
+            payload = (res.get("data") or [{}])[0].get("b64_json")
+            if payload:
+                b64 = payload
+                engine = "diffusers"
+            elif res.get("error"):
+                logger.warning(f"diffusers edit unavailable: {str(res.get('error'))[:120]}")
+        except Exception as e:
+            logger.warning(f"diffusers edit failed: {str(e)[:160]}")
     try:
         from unified.lcm_onnx_numpy import find_lcm_dir, img2img_b64
         d = find_lcm_dir()
-        if d is not None and raw:
+        if b64 is None and d is not None and raw:
             import base64 as _b64
             try:
                 w, h = size.lower().split("x")
@@ -574,13 +636,23 @@ async def edits(
             steps = 6 if (quality or "medium") == "medium" else 4
             b64 = img2img_b64(d, _b64.b64encode(raw).decode(), prompt or "edit",
                               strength=float(strength or 0.75), size=side, steps=steps)
+            engine = "onnx-lcm"
     except Exception as e:
         logger.warning(f"onnx img2img failed: {str(e)[:200]}")
     if not b64:
-        b64 = _try_real_generation(model_id, prompt or "edit", size, quality)
+        b64, engine = _try_real_generation(model_id, prompt or "edit", size, quality)
     if not b64:
         b64 = _placeholder_png_b64(color=(30, 120, 200))
-    return {"created": int(time.time()), "data": [{"b64_json": b64}], "request_id": rid}
+        engine = "placeholder"
+    real_size = ""
+    try:
+        from PIL import Image as _Image
+        _im = _Image.open(io.BytesIO(base64.b64decode(b64)))
+        real_size = f"{_im.width}x{_im.height}"
+    except Exception:
+        pass
+    return {"created": int(time.time()), "data": [{"b64_json": b64}],
+            "request_id": rid, "engine": engine, "size": real_size}
 
 
 @app.post("/v1/images/inpaint")
@@ -632,6 +704,111 @@ def inpaint(req: InpaintRequest):
                     "request_id": rid, "engine": "diffusion"}
     return {"image": req.image, "elapsed": round(time.time() - t0, 2),
             "request_id": rid, "engine": "echo"}
+
+
+MAX_OUTPAINT_SIDE = 2048
+MAX_OUTPAINT_PIXELS = 4_000_000
+
+
+def _edge_pad_image(img, left: int, right: int, top: int, bottom: int):
+    """Pad with replicated edge pixels so the model has real context to extend."""
+    import numpy as np
+    from PIL import Image
+
+    arr = np.asarray(img.convert("RGB"))
+    padded = np.pad(arr, ((top, bottom), (left, right), (0, 0)), mode="edge")
+    return Image.fromarray(padded, "RGB")
+
+
+def _border_mask(width: int, height: int, left: int, right: int,
+                 top: int, bottom: int):
+    import numpy as np
+    from PIL import Image
+
+    m = np.zeros((height, width), dtype=np.uint8)
+    if left:
+        m[:, :left] = 255
+    if right:
+        m[:, width - right:] = 255
+    if top:
+        m[:top, :] = 255
+    if bottom:
+        m[height - bottom:, :] = 255
+    return Image.fromarray(m, "L")
+
+
+@app.post("/v1/images/outpaint")
+def outpaint(req: OutpaintRequest):
+    """Expand the canvas and let the inpaint model paint the new border."""
+    rid = req.request_id or f"req-{uuid.uuid4().hex[:8]}"
+    if not req.image:
+        return JSONResponse(status_code=400, content={"error": "missing image b64"})
+    model_id = _resolve_image_model(req.model)
+    try:
+        _manager.ensure("image", model_id)
+    except ModelLoadingError as e:
+        return _raise_loading(e)
+    try:
+        import numpy as np  # noqa: F401
+        from unified.lcm_onnx_numpy import (_b64_image_to_pil, _pil_to_b64,
+                                            find_lcm_dir, inpaint_b64)
+    except Exception as e:
+        return JSONResponse(status_code=503, content={
+            "error": "will not load", "detail": f"outpaint engine unavailable: {str(e)[:160]}"})
+    d = find_lcm_dir()
+    if d is None:
+        return JSONResponse(status_code=503, content={
+            "error": "will not load",
+            "detail": "LCM ONNX pipeline not found; install LCM_Dreamshaper_ONNX"})
+
+    try:
+        src = _b64_image_to_pil(req.image).convert("RGB")
+    except Exception as e:
+        return JSONResponse(status_code=400, content={"error": f"bad image b64: {str(e)[:120]}"})
+
+    w, h = src.size
+    short = min(w, h)
+    left = int(req.left or 0)
+    right = int(req.right or 0)
+    top = int(req.top or 0)
+    bottom = int(req.bottom or 0)
+    if req.margin and req.margin > 0:
+        m = int(round(short * float(req.margin)))
+        left = left or m
+        right = right or m
+        top = top or m
+        bottom = bottom or m
+    if min(left, right, top, bottom) < 0:
+        return JSONResponse(status_code=400, content={"error": "negative margin"})
+    if not any((left, right, top, bottom)):
+        return JSONResponse(status_code=400, content={
+            "error": "nothing to expand: pass left/right/top/bottom pixels or margin"})
+    new_w, new_h = w + left + right, h + top + bottom
+    if new_w > MAX_OUTPAINT_SIDE or new_h > MAX_OUTPAINT_SIDE:
+        return JSONResponse(status_code=400, content={
+            "error": f"result too large: {new_w}x{new_h} (max side {MAX_OUTPAINT_SIDE})"})
+    if new_w * new_h > MAX_OUTPAINT_PIXELS:
+        return JSONResponse(status_code=400, content={
+            "error": f"result too large: {new_w}x{new_h} (max {MAX_OUTPAINT_PIXELS} pixels)"})
+
+    t0 = time.time()
+    padded = _edge_pad_image(src, left, right, top, bottom)
+    mask = _border_mask(new_w, new_h, left, right, top, bottom)
+    size = max(256, min(512, max(new_w, new_h)))
+    try:
+        out_b64 = inpaint_b64(d, _pil_to_b64(padded), _pil_to_b64(mask),
+                              req.prompt, negative_prompt=req.negative_prompt,
+                              guidance=float(req.guidance or 1.0),
+                              strength=float(req.strength or 0.99),
+                              size=int(size), steps=int(req.steps or 6),
+                              mode="add")
+    except Exception as e:
+        logger.warning(f"outpaint failed: {str(e)[:200]}")
+        return JSONResponse(status_code=500, content={"error": f"outpaint failed: {str(e)[:200]}"})
+    return {"image": out_b64, "elapsed": round(time.time() - t0, 2),
+            "request_id": rid, "engine": "onnx-outpaint",
+            "input_size": [w, h], "output_size": [new_w, new_h],
+            "margins": {"left": left, "right": right, "top": top, "bottom": bottom}}
 
 
 @app.post("/v1/images/harmonize")

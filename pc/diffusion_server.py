@@ -745,7 +745,13 @@ def _init_lazy():
         ckpt = str(p.get("path") or p.get("file") or "").strip()
         if not ckpt:
             raise RuntimeError(f"Model '{mid}' has no path/file in {reg_path}")
-        if not Path(ckpt).exists():
+        # Relative paths are resolved against models.json, so the whole pc/
+        # folder can be moved or copied without editing absolute paths.
+        ckpt_path = Path(ckpt)
+        if not ckpt_path.is_absolute():
+            ckpt_path = (reg_path.parent / ckpt_path).resolve()
+        ckpt = str(ckpt_path)
+        if not ckpt_path.exists():
             # Do NOT crash the whole server when weights are missing
             # (e.g. moved to DiffusionServer/models during consolidation).
             # Health + /v1/models + /webui keep working; inference for this
@@ -1004,6 +1010,65 @@ def _resolve_model_id(requested: str | None) -> str:
     return mid
 
 
+def _embed_default_args():
+    """Argparse defaults for embedding (unified_server imports this module).
+
+    Without a Namespace the generation path dereferences `_args.model`,
+    `_args.cpu_offload`, ... and crashes, so the embedder used to fall back to
+    the ONNX pipeline without saying so.
+    """
+    import argparse
+
+    ns = argparse.Namespace()
+    ns.model = ""
+    ns.lazy = True
+    ns.models_json = os.environ.get("DIFFUSION_MODELS_JSON", "")
+    ns.default_model = ""
+    ns.lora = None
+    ns.lora_scale = 1.0
+    ns.port = int(os.environ.get("DIFFUSION_PORT", "8101"))
+    ns.host = os.environ.get("DIFFUSION_HOST", "127.0.0.1")
+    ns.dtype = "bfloat16"
+    ns.device_map = None
+    ns.steps = 0
+    ns.guidance_scale = 3.5
+    ns.negative_prompt = ""
+    ns.single_file_config = ""
+    ns.pipeline = ""
+    ns.width = 1024
+    ns.height = 1024
+    ns.cpu_offload = False
+    ns.attention_slicing = False
+    ns.vae_slicing = False
+    ns.disable_safety_checker = False
+    ns.log_file = ""
+    ns.log_level = "INFO"
+    ns.harmonize_gpu = None
+    ns.allowed_host = []
+    ns.allowed_origin = []
+    ns._registry_negative = ""
+    return ns
+
+
+def ensure_registry() -> dict:
+    """Load models.json into _REGISTRY once (idempotent, thread-safe).
+
+    The registry used to be filled only by this module's FastAPI lifespan, so
+    an embedder (unified_server imports diffusion_server as a module) saw an
+    empty registry and every generation request failed with "Unknown model"
+    and silently fell back to the ONNX path.
+    """
+    global _REGISTRY, _args
+    if _REGISTRY:
+        return _REGISTRY
+    with _MODEL_LOCK:
+        if not _REGISTRY:
+            if _args is None:
+                _args = _embed_default_args()
+            _init_lazy()
+    return _REGISTRY
+
+
 def ensure_model_loaded(requested: str | None, pixels: int = 0) -> str:
     """Load the requested registry model on demand (thread-safe).
 
@@ -1020,6 +1085,7 @@ def ensure_model_loaded(requested: str | None, pixels: int = 0) -> str:
     produce inconsistent results if concurrent).
     """
     global _pipe, _model_id, _inpaint_pipe, _img2img_pipe, _ACTIVE_PROFILE
+    ensure_registry()
     model_id = _resolve_model_id(requested)
     prof = _REGISTRY.get(model_id, {})
     if prof.get("missing"):

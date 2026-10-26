@@ -429,3 +429,45 @@ Test files: `pc/tools/test_pc_states.py` (PASS) and `android/tests/test_android_
       directory; `turbo` (1.62 GB) works through the API.
 - [x] `/v1/models` has no duplicate ids: 5 image, 6 audio, 1 upscale, 1 vlm,
       each with `size_mb`, `install_state` and `installed`.
+
+## PC server end-to-end test (2026-10-26)
+
+Suite: `pc/tools/test_pc_all.py` (39 content-level checks, run against the live
+server). It found three real bugs that HTTP-200 tests never would:
+
+- [x] **Silent engine fallback.** `diffusion_server`'s registry was filled only
+      by its own FastAPI lifespan; `unified_server` imports it as a module, so
+      `_REGISTRY` stayed empty, every generation failed internally with
+      "Unknown model" and the server quietly produced ONNX LCM images instead
+      of using the selected SD model (square, <=512 px). Fixed:
+      `diffusion_server.ensure_registry()` (idempotent, called from
+      `ensure_model_loaded`) plus `_embed_default_args()` for the argparse
+      attributes when embedded.
+- [x] **models.json pointed at the old root.** All five SD profiles used
+      absolute `D:\AI\DiffusionServer\models\...` paths that no longer exist
+      after the repo split, so every weight was marked missing. Paths are now
+      relative (`models/...`) and resolved against `models.json`, so `pc/` can
+      be moved anywhere.
+- [x] **`diffusers` and `accelerate` were not installed**, so the torch path
+      could never run. Installed (diffusers 0.42.0, accelerate 1.15.0) and the
+      pin in `requirements.txt` updated.
+- [x] `/v1/images/generations` now reports the truth: real output size decoded
+      from the produced PNG plus `engine` (`diffusers` | `onnx-lcm` |
+      `placeholder`); `/v1/images/edits` reports `engine` and `size` too.
+- [x] New endpoint `POST /v1/images/outpaint` (edge-replicate padding + border
+      mask + LCM inpaint, strength 0.99, caps 2048 px/side and 4 MP) and the
+      "Expand canvas (outpaint)" mode in the Inpaint tab.
+- [x] Verified: **39/39 checks passed** — generation (512x512, 320x256 exact
+      aspect, n=2 distinct), edit, inpaint add/remove/color with pixel
+      assertions (inside 85.8, outside 0.27), outpaint 512->768 with the centre
+      unchanged (0.70) and a non-flat border, upscale 2x/4x to 1024/2048,
+      caption, chat, transcribe (jfk text exact, silence -> ""), translations,
+      7 ffmpeg operations verified with ffprobe, model status/verify/progress,
+      error paths (400 for missing image, bad base64, oversized outpaint) and
+      two parallel generations.
+- [x] `/v1/images/edits` now runs the selected diffusion model through
+      `diffusion_server._run_edit` (honours the requested size, e.g. 640x384,
+      `engine=diffusers`) and only falls back to the ONNX LCM engine.
+- [x] Engine init has a single code path: `unified/engine.init_diffusion_engine`
+      delegates to `diffusion_server.ensure_registry()` instead of building a
+      second argparse Namespace that could drift from the CLI.

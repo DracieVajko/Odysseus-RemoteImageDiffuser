@@ -575,3 +575,40 @@ pinned sha256. Installed state is derived from the files (exact `model.bin`
 size, parseable `config.json`, existing `tokenizer.json`), never from a flag,
 so an aborted download cannot look complete. Verified with a fresh 77 MB
 `tiny` install (10 s) and an uninstall.
+
+## PC server end-to-end test (2026-10-26)
+
+**Why the suite asserts content, not status codes.** The first version checked
+`r.status_code == 200` and passed while the server was generating 320x320 for a
+320x256 request. Reading the produced PNG and comparing pixels is what exposed
+the three bugs below.
+
+**Registry lifetime.** `diffusion_server._init_lazy()` only ran in that
+module's own FastAPI lifespan. Because `unified_server` imports the module
+instead of running its app, `_REGISTRY` was empty and `ensure_model_loaded()`
+answered 400 "Unknown model"; `_try_real_generation` caught it, logged a
+warning and fell through to the ONNX LCM pipeline. The response had no engine
+field, so nothing told the client. `ensure_registry()` now initialises the
+registry on first use and the response carries `engine`.
+
+**Path portability.** Absolute paths in `models.json` broke with the `pc/`
+split. Relative paths resolved against the registry file make the product
+folder self-contained, matching the "download only `pc/`" requirement.
+
+**Outpaint.** Implemented on top of the existing inpaint pipeline: the image is
+edge-replicated to the target canvas, the border becomes the mask, strength is
+0.99, and the result is composited back so the original pixels stay exact
+(measured centre diff 0.70 on a 512->768 run). Caps are 2048 px per side and
+4 MP, returning 400 with the computed size otherwise.
+
+**Evidence.** 39/39 checks, including pixel-level assertions and ffprobe
+metadata; artifacts in `%TEMP%\prism_full_test` (`gen_512.png`, `inpaint_add.png`,
+`outpaint_768.png`, `upscale_1024.png`, `results.json`).
+
+**img2img engine order.** `/v1/images/edits` used to try the ONNX LCM engine
+first, which silently capped every edit at 512 square. It now calls
+`diffusion_server._run_edit` under the model lock (the model the user picked,
+the size they asked for), then ONNX, then text2img, then a placeholder, and the
+`engine` field says which one produced the pixels. Verified with a 640x384 edit
+on DreamShaper_8: `engine=diffusers`, output 640x384, mean|diff| 17.8 against the
+source.

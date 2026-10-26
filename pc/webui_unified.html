@@ -137,8 +137,10 @@ canvas#maskpad { width: 100%; border-radius: 6px; border: 1px solid var(--border
 <option value="add">Add / replace (prompt)</option>
 <option value="remove">Remove (prompt: empty background)</option>
 <option value="color">Change color (no AI)</option>
+<option value="outpaint">Expand canvas (outpaint)</option>
 </select></div>
 <div id="paintcolorwrap" style="display:none"><label>Target color</label><input type="color" id="paintcolor" value="#0066ff" style="width:100%;height:38px"></div>
+<div id="paintmarginwrap" style="display:none"><label>Expand each side by (%)</label><input type="number" id="paintmargin" value="25" min="5" max="100" step="5" style="width:100%"></div>
 </div>
 <label>Prompt (what should be there instead)</label>
 <textarea id="prompt3" placeholder="empty street, no people, clean background"></textarea>
@@ -458,6 +460,8 @@ function resolveSize(selId, inputId){
 function togglePaintColor(){
   const m = document.getElementById('paintmode').value;
   document.getElementById('paintcolorwrap').style.display = m === 'color' ? 'block' : 'none';
+  const mw = document.getElementById('paintmarginwrap');
+  if (mw) mw.style.display = m === 'outpaint' ? 'block' : 'none';
 }
 let FFPRESETS = null;
 async function loadFfPresets(){
@@ -576,12 +580,37 @@ function loadPaint(inp){
   };
   img.src = URL.createObjectURL(f);
 }
+async function generateOutpaint(prompt){
+  const btn = document.getElementById('btnPaint');
+  const pct = Math.max(5, Math.min(100, +document.getElementById('paintmargin').value || 25));
+  const body = { image: paintImg, prompt,
+    negative_prompt: document.getElementById('negprompt3').value.trim(),
+    guidance: +(document.getElementById('guidance3').value || 1),
+    margin: pct / 100,
+    steps: 6,
+    model: document.getElementById('model').value,
+    strength: 0.99, request_id: rid() };
+  btn.disabled = true; btn.textContent = 'Expanding…';
+  log('POST /v1/images/outpaint margin='+pct+'% prompt='+prompt.slice(0,60));
+  const t0 = Date.now();
+  try {
+    const r = await fetch('/v1/images/outpaint',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+    const j = await r.json();
+    if(!r.ok){ log('ERROR '+r.status+': '+JSON.stringify(j).slice(0,500)); alert('Error '+r.status+': '+(j.error||'')); return; }
+    const secs = ((Date.now()-t0)/1000).toFixed(1);
+    addCard('data:image/png;base64,'+j.image,
+      'outpaint '+(j.input_size||[]).join('x')+' → '+(j.output_size||[]).join('x')+' · '+(j.engine||'?')+' · '+secs+'s',
+      'outpaint_'+Date.now()+'.png');
+    log('outpaint done in '+secs+'s '+(j.input_size||[]).join('x')+' -> '+(j.output_size||[]).join('x'));
+  } catch(e){ log('ERROR: '+e); } finally { btn.disabled=false; btn.textContent='Inpaint masked area'; refresh(); }
+}
 async function generatePaint(){
   const btn = document.getElementById('btnPaint');
   const prompt = document.getElementById('prompt3').value.trim();
   if(!paintImg){ alert('Pick an image first'); return; }
   const paintMode = document.getElementById('paintmode').value;
   if(!prompt && paintMode !== 'color'){ alert('Enter a prompt'); return; }
+  if (paintMode === 'outpaint') { return generateOutpaint(prompt); }
   const mask = pad.toDataURL('image/png').split(',')[1];
   const mode = document.getElementById('paintmode').value;
   const body = { image: paintImg, mask, prompt,
