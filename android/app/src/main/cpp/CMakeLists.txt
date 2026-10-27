@@ -27,3 +27,18 @@ add_subdirectory(third_party/whisper.cpp whispercpp-build)
 add_library(odysseus_whisper_jni SHARED whisper_jni.cpp)
 set_target_properties(odysseus_whisper_jni PROPERTIES OUTPUT_NAME "whisper_jni")
 target_link_libraries(odysseus_whisper_jni PRIVATE whisper log)
+
+# --- Real-ESRGAN upscale (ncnn Vulkan, prebuilt static libs) ---
+# The ncnn Android Vulkan package is downloaded by tools/fetch_ncnn.ps1 into
+# third_party/ncnn (gitignored). Without it the JNI lib is simply not built and
+# the Kotlin engine returns 503.
+set(NCNN_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/third_party/ncnn-shared/ncnn-20261020-android-vulkan-shared/${ANDROID_ABI}")
+if(EXISTS "${NCNN_ROOT}/lib/libncnn.so")
+    set(ncnn_DIR "${NCNN_ROOT}/lib/cmake/ncnn")
+    find_package(ncnn REQUIRED)
+    add_library(odysseus_realesrgan_jni SHARED realesrgan_jni.cpp)
+    set_target_properties(odysseus_realesrgan_jni PROPERTIES OUTPUT_NAME "realesrgan_jni")
+    target_link_libraries(odysseus_realesrgan_jni PRIVATE ncnn)
+else()
+    message(STATUS "ncnn not found for ${ANDROID_ABI}; skipping realesrgan_jni")
+endif()

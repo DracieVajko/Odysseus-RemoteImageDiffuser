@@ -367,15 +367,27 @@ class ModelDownloader(private val ctx: Context) {
     }
 
     private fun writeManifest(asset: ModelAsset, dir: File) {
+        // Archives are extracted first: the manifest must describe the files the
+        // engine will load. Recording the .zip path (deleted by unzipArchives)
+        // made isReady() false forever, so upscale answered 503 "not downloaded"
+        // even though the download had finished.
+        unzipArchives(dir)
+        val shaByName = asset.files.associate { it.path to it.sha256 }
         val files = JSONArray()
-        for (f in asset.files) {
-            val local = File(dir, f.path)
-            files.put(
-                JSONObject()
-                    .put("path", f.path)
-                    .put("size", local.length())
-                    .put("sha256", f.sha256)
-            )
+        dir.walkTopDown()
+            .filter { it.isFile && it.length() > 0 }
+            .sortedBy { it.absolutePath }
+            .forEach { f ->
+                val rel = f.relativeTo(dir).invariantSeparatorsPath
+                files.put(
+                    JSONObject()
+                        .put("path", rel)
+                        .put("size", f.length())
+                        .put("sha256", shaByName[rel] ?: "")
+                )
+            }
+        if (files.length() == 0) {
+            throw java.io.IOException("install finished with no files in ${dir.name}")
         }
         val root = JSONObject()
             .put("id", asset.id)
@@ -383,9 +395,8 @@ class ModelDownloader(private val ctx: Context) {
             .put("engine", asset.engine)
             .put("files", files)
             .put("finished_at", System.currentTimeMillis())
-// .zip is extracted so the engine sees .param/.bin directly
-        unzipArchives(dir)
         manifest(asset.id).writeText(root.toString(2))
+        Log.i(TAG, "manifest ${asset.id}: ${files.length()} file(s)")
     }
 
     private fun unzipArchives(dir: File) {

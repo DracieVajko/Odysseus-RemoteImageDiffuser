@@ -786,7 +786,8 @@ class MainActivity : AppCompatActivity() {
         genQuality.adapter = android.widget.ArrayAdapter(
             this, android.R.layout.simple_spinner_dropdown_item, listOf("low", "medium", "high"))
         spinnerPaintMode.adapter = android.widget.ArrayAdapter(
-            this, android.R.layout.simple_spinner_dropdown_item, listOf("add", "remove", "color"))
+            this, android.R.layout.simple_spinner_dropdown_item,
+            listOf("add", "remove", "color", "outpaint (25%)"))
 
         btnPickInpaint.setOnClickListener { openDocument("image/*", "Pictures", pickInpaint) }
         btnPickMask.setOnClickListener { openDocument("image/*", "Pictures", pickMask) }
@@ -1061,10 +1062,36 @@ class MainActivity : AppCompatActivity() {
     }
 
 
+    override fun onTrimMemory(level: Int) {
+        super.onTrimMemory(level)
+        // LMKD killed the process for low memory during a transcription run.
+        // Drop the heavy native engines as soon as the system asks for RAM.
+        if (level >= android.content.ComponentCallbacks2.TRIM_MEMORY_RUNNING_LOW) {
+            try {
+                LcmOnnxEngine.release()
+                RealEsrganNcnnEngine.release()
+                log("memory pressure ($level): released image/upscale engines")
+            } catch (e: Exception) {
+                log("trim release failed: ${e.message}")
+            }
+        }
+        if (level >= android.content.ComponentCallbacks2.TRIM_MEMORY_RUNNING_CRITICAL) {
+            try {
+                SmolVlmEngine.release()
+                WhisperLib.release()
+            } catch (e: Exception) {
+                log("critical trim release failed: ${e.message}")
+            }
+        }
+    }
+
     private fun runInpaint() {
         val img = inpaintUri ?: run { toast("Pick an image first"); return }
-        val mask = maskUri ?: run { toast("Pick a mask first"); return }
-        val mode = spinnerPaintMode.selectedItem?.toString() ?: "add"
+        val rawMode = spinnerPaintMode.selectedItem?.toString() ?: "add"
+        val outpaint = rawMode.startsWith("outpaint")
+        // Outpaint expands the canvas, so it needs no mask and no strength.
+        val mask = if (outpaint) null else maskUri ?: run { toast("Pick a mask first"); return }
+        val mode = if (outpaint) "add" else rawMode
         val prompt = paintPrompt.text.toString().trim()
         if (mode != "color" && prompt.isEmpty()) { toast("Enter a prompt"); return }
         paintStatus.text = "inpainting…"
@@ -1073,24 +1100,35 @@ class MainActivity : AppCompatActivity() {
             val imgB64 = contentResolver.openInputStream(img)?.use { it.readBytes() }?.let {
                 android.util.Base64.encodeToString(it, android.util.Base64.NO_WRAP)
             }
-            val maskB64 = contentResolver.openInputStream(mask)?.use { it.readBytes() }?.let {
-                android.util.Base64.encodeToString(it, android.util.Base64.NO_WRAP)
+            val maskB64 = mask?.let { uri ->
+                contentResolver.openInputStream(uri)?.use { it.readBytes() }?.let {
+                    android.util.Base64.encodeToString(it, android.util.Base64.NO_WRAP)
+                }
             }
-            if (imgB64 == null || maskB64 == null) {
+            if (imgB64 == null || (!outpaint && maskB64 == null)) {
                 handler.post { btnInpaint.isEnabled = true; paintStatus.text = "error: cannot read files" }
                 return@Thread
             }
-            val body = org.json.JSONObject()
-                .put("image", imgB64).put("mask", maskB64)
-                .put("prompt", prompt)
-                .put("negative_prompt", paintNegative.text.toString().trim())
-                .put("guidance", paintGuidance.text.toString().trim().toFloatOrNull() ?: 1.0f)
-                .put("strength", paintStrength.progress / 100.0)
-                .put("mode", mode)
-                .put("color", paintColor.text.toString().trim().ifEmpty { "#0066FF" })
-                .put("width", 512).put("height", 512)
-                .toString()
-            val resp = httpPostJson("http://127.0.0.1:8101/v1/images/inpaint", body)
+            val body = org.json.JSONObject().put("image", imgB64)
+            val endpoint = if (outpaint) {
+                body.put("prompt", prompt)
+                    .put("negative_prompt", paintNegative.text.toString().trim())
+                    .put("guidance", paintGuidance.text.toString().trim().toFloatOrNull() ?: 1.0f)
+                    .put("margin", 0.25)
+                    .put("steps", 6)
+                "http://127.0.0.1:8101/v1/images/outpaint"
+            } else {
+                body.put("mask", maskB64)
+                    .put("prompt", prompt)
+                    .put("negative_prompt", paintNegative.text.toString().trim())
+                    .put("guidance", paintGuidance.text.toString().trim().toFloatOrNull() ?: 1.0f)
+                    .put("strength", paintStrength.progress / 100.0)
+                    .put("mode", mode)
+                    .put("color", paintColor.text.toString().trim().ifEmpty { "#0066FF" })
+                    .put("width", 512).put("height", 512)
+                "http://127.0.0.1:8101/v1/images/inpaint"
+            }
+            val resp = httpPostJson(endpoint, body.toString())
             handler.post {
                 btnInpaint.isEnabled = true
                 if (resp == null) { paintStatus.text = "error: no response"; return@post }
@@ -1104,7 +1142,12 @@ class MainActivity : AppCompatActivity() {
                     paintImage.setImageBitmap(bmp)
                     paintImage.visibility = View.VISIBLE
                     btnSaveInpaint.visibility = View.VISIBLE
-                    paintStatus.text = "done (" + j.optString("engine", "onnx") + ", " + j.optDouble("elapsed", 0.0) + "s)"
+                    val outSize = j.optJSONArray("output_size")
+                    val sizeTxt = if (outSize != null) {
+                        " " + outSize.optInt(0) + "x" + outSize.optInt(1)
+                    } else ""
+                    paintStatus.text = "done" + sizeTxt + " (" + j.optString("engine", "onnx") +
+                        ", " + j.optDouble("elapsed", 0.0) + "s)"
                 } catch (e: Exception) {
                     paintStatus.text = "error: ${e.message}"
                 }

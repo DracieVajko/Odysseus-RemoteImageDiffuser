@@ -38,6 +38,13 @@ import kotlinx.coroutines.withContext
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.decodeFromString
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonArray as KxJsonArray
+import kotlinx.serialization.json.JsonObject as KxJsonObject
+import kotlinx.serialization.json.contentOrNull
+import kotlinx.serialization.json.intOrNull
+import kotlinx.serialization.json.jsonArray
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
 import java.io.File
 import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
@@ -130,6 +137,24 @@ data class UpscaleReq(
     val request_id: String = "",
 )
 
+/** Expand the canvas and let the inpaint engine paint the new border. */
+@Serializable
+data class OutpaintReq(
+    val image: String = "",
+    val prompt: String = "",
+    val negative_prompt: String = "",
+    val model: String = "",
+    val left: Int = 0,
+    val right: Int = 0,
+    val top: Int = 0,
+    val bottom: Int = 0,
+    val margin: Double = 0.0,
+    val guidance: Float = 1.0f,
+    val strength: Double = 0.99,
+    val steps: Int? = null,
+    val request_id: String = "",
+)
+
 @Serializable
 data class CaptionReq(
     val image: String = "",
@@ -199,6 +224,10 @@ class ApiServer(
     // session init/release churn was crashing the process); it is released
     // after 10 minutes without image work.
     @Volatile private var lastImageUse = 0L
+    // Any heavy engine counts here: on a phone that also runs Instagram, Outlook
+    // and friends, residency beyond a minute is what got this process killed
+    // with reason=LOW_MEMORY (twice) and restarted the launcher with it.
+    @Volatile private var lastHeavyUse = 0L
 
     fun start(wait: Boolean = false): NettyApplicationEngine {
 // Explicit 0.0.0.0: the default bind may be IPv6-only ([::]), which adb forward
@@ -219,11 +248,43 @@ class ApiServer(
             // Idle unload keeps the RAM budget honest without re-initialising
             // the ONNX sessions on every request.
             while (isActive) {
-                delay(60_000)
-                val idleMs = System.currentTimeMillis() - lastImageUse
-                if (lastImageUse > 0 && idleMs > 10 * 60_000 && LcmOnnxEngine.isReady()) {
-                    withContext(heavyDispatcher) { LcmOnnxEngine.release() }
-                    android.util.Log.i("ApiServer", "idle unload: LCM engine released")
+                delay(15_000)
+                val idleMs = System.currentTimeMillis() - maxOf(lastImageUse, lastHeavyUse)
+                val anyReady = LcmOnnxEngine.isReady() || RealEsrganNcnnEngine.isReady() ||
+                    SmolVlmEngine.isReady() || WhisperLib.isAvailable()
+                if (anyReady && idleMs > 45_000) {
+                    withContext(heavyDispatcher) {
+                        LcmOnnxEngine.release()
+                        RealEsrganNcnnEngine.release()
+                        SmolVlmEngine.release()
+                        WhisperLib.release()
+                    }
+                    android.util.Log.i("ApiServer", "idle unload: all engines released")
+                }
+                // Memory watchdog. The system killed the process with
+                // reason=LOW_MEMORY after a run that had LCM + whisper + ncnn
+                // resident (pid 28143, 2026-10-27 10:41). Native engines are
+                // cheap to rebuild and expensive to lose the whole server for.
+                try {
+                    val am = appContext?.getSystemService(android.content.Context.ACTIVITY_SERVICE)
+                            as? android.app.ActivityManager
+                    if (am != null) {
+                        val mi = android.app.ActivityManager.MemoryInfo()
+                        am.getMemoryInfo(mi)
+                        val availMb = mi.availMem / 1048576
+                        if (availMb < 1536) {
+                            withContext(heavyDispatcher) {
+                                LcmOnnxEngine.release()
+                                RealEsrganNcnnEngine.release()
+                                SmolVlmEngine.release()
+                                WhisperLib.release()
+                            }
+                            android.util.Log.w("ApiServer",
+                                "low memory ($availMb MB free): released all engines")
+                        }
+                    }
+                } catch (e: Exception) {
+                    android.util.Log.w("ApiServer", "memory watchdog failed: ${e.message}")
                 }
             }
         }
@@ -506,8 +567,41 @@ class ApiServer(
                     ),
                 )
             }
-            post("/v1/models/cancel") {
-                val body = call.receiveText()
+            get("/v1/models/status/{id}") {
+                val id = call.parameters["id"] ?: ""
+                val asset = downloader.findAsset(id)
+                    ?: return@get call.respond(HttpStatusCode.NotFound,
+                        jsonOf("error" to "unknown model id: $id"))
+                call.respond(
+                    jsonOf(
+                        "id" to asset.id,
+                        "kind" to asset.kind,
+                        "kind_label" to ModelCatalog.kindLabel(asset.kind),
+                        "engine" to asset.engine,
+                        "label" to asset.label,
+                        "installed" to downloader.isReady(id),
+                        "installed_mb" to downloader.installedSizeMb(id),
+                        "path" to downloader.modelDir(id).absolutePath,
+                        "state" to (downloader.progress(id)?.state?.name?.lowercase() ?: "idle"),
+                        "error" to (downloader.progress(id)?.error ?: ""),
+                    ),
+                )
+            }
+            post("/v1/models/verify/{id}") {
+                val id = call.parameters["id"] ?: ""
+                val asset = downloader.findAsset(id)
+                    ?: return@post call.respond(HttpStatusCode.NotFound,
+                        jsonOf("error" to "unknown model id: $id"))
+                call.respond(
+                    jsonOf(
+                        "id" to asset.id,
+                        "verified" to downloader.isReady(id),
+                        "method" to "READY manifest: every listed file exists and is non-empty",
+                        "installed_mb" to downloader.installedSizeMb(id),
+                    ),
+                )
+            }
+            post("/v1/models/cancel") {                val body = call.receiveText()
                 val id = Regex("\"id\"\\s*:\\s*\"([^\"]+)\"").find(body)?.groupValues?.get(1)
                     ?: return@post call.respond(HttpStatusCode.BadRequest, jsonOf("error" to "missing id"))
                 downloader.cancel(id)
@@ -569,9 +663,15 @@ class ApiServer(
                 )
             }
             post("/v1/ffmpeg/{op}") {
+                // ffmpeg is not bundled in the APK yet (docs/ONDEVICE-PLAN.md):
+                // answer 503 with a reason instead of pretending it worked.
                 call.respond(
                     HttpStatusCode.ServiceUnavailable,
-                    jsonOf("error" to "ffmpeg tools run on PC (:8101) or via Remote mode"),
+                    jsonOf(
+                        "error" to "will not load",
+                        "detail" to "ffmpeg tools are not bundled in the Android build yet; " +
+                            "use the PC product (pc/) for /v1/ffmpeg/*",
+                    ),
                 )
             }
             post("/v1/images/generations") {
@@ -601,10 +701,12 @@ class ApiServer(
                 }
                 val modelDir = downloader.modelDir(modelId)
                 lastImageUse = System.currentTimeMillis()
+                lastHeavyUse = lastImageUse
                 // Serialize the heavy path: init + UNet steps.
                 val generated = withContext(heavyDispatcher) {
                     WhisperLib.release()
                     if (!LcmOnnxEngine.isReady()) {
+                        requireMemory(1400, "the LCM image engine")
                         manager.setLoading(modelId, true)
                         try {
                             if (!LcmOnnxEngine.init(ctx, modelDir)) {
@@ -616,7 +718,7 @@ class ApiServer(
                     }
                     // The ONNX engine is square; use the larger side and report the
                     // actual size (the requested WxH may be non-square or > 512).
-                    val side = maxOf(w, h).coerceIn(256, 512)
+                    val side = lcmSize(maxOf(w, h))
                     val images = ArrayList<String>(req.n)
                     for (i in 0 until req.n) {
                         val bmp = LcmOnnxEngine.generate(
@@ -644,6 +746,7 @@ class ApiServer(
                         "steps" to steps,
                         "size" to "${side}x${side}",
                         "requested_size" to "${w}x${h}",
+                        "engine" to "onnx-lcm",
                     ),
                 )
             }
@@ -700,8 +803,10 @@ class ApiServer(
                     }
                 val (w, h) = parseSize(size) ?: (512 to 512)
                 lastImageUse = System.currentTimeMillis()
+                lastHeavyUse = lastImageUse
                 val out = withContext(heavyDispatcher) {
                     if (!LcmOnnxEngine.isReady()) {
+                        requireMemory(1400, "the LCM image engine")
                         manager.setLoading(modelId, true)
                         try { LcmOnnxEngine.init(ctx, downloader.modelDir(modelId)) }
                         finally { manager.setLoading(modelId, false) }
@@ -720,6 +825,7 @@ class ApiServer(
                         "created" to System.currentTimeMillis() / 1000,
                         "data" to List(n.coerceIn(1, 4)) { jsonOf("b64_json" to b64) },
                         "request_id" to rid,
+                        "engine" to "onnx-lcm",
                     ),
                 )
             }
@@ -749,12 +855,14 @@ class ApiServer(
                     return@post
                 }
                 val steps = (req.steps ?: 6).coerceIn(1, 8)
-                val side = maxOf(req.width, req.height).coerceIn(256, 512)
+                val side = lcmSize(maxOf(req.width, req.height))
                 val colorInt = parseHexColor(req.color)
                 val t0 = System.currentTimeMillis()
                 lastImageUse = t0
+                lastHeavyUse = t0
                 val out = withContext(heavyDispatcher) {
                     if (!LcmOnnxEngine.isReady()) {
+                        requireMemory(1400, "the LCM image engine")
                         manager.setLoading(modelId, true)
                         try { LcmOnnxEngine.init(ctx, downloader.modelDir(modelId)) }
                         finally { manager.setLoading(modelId, false) }
@@ -777,6 +885,99 @@ class ApiServer(
                 val b64 = bitmapToB64(out)
                 out.recycle()
                 call.respond(jsonOf("image" to b64, "elapsed" to elapsed, "request_id" to rid, "engine" to "onnx"))
+            }
+            post("/v1/images/outpaint") {
+                val req = wireJson.decodeFromString<OutpaintReq>(call.receiveText())
+                if (req.image.isEmpty()) {
+                    call.respond(HttpStatusCode.BadRequest, jsonOf("error" to "image required (base64)"))
+                    return@post
+                }
+                val src = decodeB64Image(req.image)
+                if (src == null) {
+                    call.respond(HttpStatusCode.BadRequest, jsonOf("error" to "cannot decode image"))
+                    return@post
+                }
+                val short = minOf(src.width, src.height)
+                var l = req.left.coerceAtLeast(0)
+                var r = req.right.coerceAtLeast(0)
+                var t = req.top.coerceAtLeast(0)
+                var b = req.bottom.coerceAtLeast(0)
+                if (req.margin > 0.0) {
+                    val m = (short * req.margin).toInt()
+                    if (l == 0) l = m
+                    if (r == 0) r = m
+                    if (t == 0) t = m
+                    if (b == 0) b = m
+                }
+                if (l + r + t + b == 0) {
+                    call.respond(HttpStatusCode.BadRequest,
+                        jsonOf("error" to "nothing to expand: pass left/right/top/bottom pixels or margin"))
+                    return@post
+                }
+                val newW = src.width + l + r
+                val newH = src.height + t + b
+                if (maxOf(newW, newH) > 2048 || newW * newH > 4_000_000) {
+                    call.respond(HttpStatusCode.BadRequest,
+                        jsonOf("error" to "result too large: ${newW}x${newH} (max side 2048, 4 MP)"))
+                    return@post
+                }
+                val modelId = "lcm-dreamshaper-int8-onnx"
+                if (!downloader.isReady(modelId)) {
+                    throw ModelWillNotLoadError("model $modelId not downloaded", -1, -1)
+                }
+                val ctx = appContext ?: run {
+                    call.respond(HttpStatusCode.InternalServerError, jsonOf("error" to "no app context"))
+                    return@post
+                }
+                val steps = (req.steps ?: 6).coerceIn(1, 8)
+                val side = lcmSize(maxOf(newW, newH))
+                val rid = req.request_id.ifEmpty { UUID.randomUUID().toString() }
+                val inW = src.width
+                val inH = src.height
+                val t0 = System.currentTimeMillis()
+                lastImageUse = t0
+                lastHeavyUse = t0
+                val out = withContext(heavyDispatcher) {
+                    if (!LcmOnnxEngine.isReady()) {
+                        requireMemory(1400, "the LCM image engine")
+                        manager.setLoading(modelId, true)
+                        try { LcmOnnxEngine.init(ctx, downloader.modelDir(modelId)) }
+                        finally { manager.setLoading(modelId, false) }
+                    }
+                    val padded = padEdge(src, l, r, t, b)
+                    val mask = borderMask(newW, newH, l, r, t, b)
+                    try {
+                        LcmOnnxEngine.inpaint(
+                            padded, mask, req.prompt,
+                            negativePrompt = req.negative_prompt,
+                            guidance = req.guidance,
+                            strength = req.strength.toFloat(),
+                            steps = steps,
+                            size = side,
+                            mode = "add",
+                        )
+                    } finally {
+                        padded.recycle()
+                        mask.recycle()
+                        src.recycle()
+                    }
+                }
+                if (out == null) {
+                    throw ModelWillNotLoadError("outpaint failed: " + LcmOnnxEngine.lastError, -1, -1)
+                }
+                val b64 = bitmapToB64(out)
+                out.recycle()
+                call.respond(
+                    jsonOf(
+                        "image" to b64,
+                        "elapsed" to (System.currentTimeMillis() - t0) / 1000.0,
+                        "request_id" to rid,
+                        "engine" to "onnx-outpaint",
+                        "input_size" to listOf(inW, inH),
+                        "output_size" to listOf(newW, newH),
+                        "margins" to mapOf("left" to l, "right" to r, "top" to t, "bottom" to b),
+                    ),
+                )
             }
             post("/v1/images/harmonize") {
                 val req = wireJson.decodeFromString<HarmonizeReq>(call.receiveText())
@@ -825,11 +1026,22 @@ class ApiServer(
                     return@post
                 }
                 switchTo("upscale", req.model)
+                lastHeavyUse = System.currentTimeMillis()
                 requireModelReady("realesrgan-x4plus-ncnn")
                 val rid = req.request_id.ifEmpty { UUID.randomUUID().toString() }
                 val src = decodeB64Image(req.image)
                 if (src == null) {
                     call.respond(HttpStatusCode.BadRequest, jsonOf("error" to "invalid image base64"))
+                    return@post
+                }
+                // 512 -> 2048 on CPU kept a phone busy for >6 minutes and the
+                // system started thrashing swap. 384 -> 1536 is the mobile cap.
+                val outSide = maxOf(src.width, src.height) * req.scale
+                if (outSide > 1536) {
+                    src.recycle()
+                    call.respond(HttpStatusCode.BadRequest, jsonOf(
+                        "error" to "upscaled side $outSide exceeds the mobile cap 1536 " +
+                            "(use scale 2 for large photos)"))
                     return@post
                 }
                 val ctx = appContext ?: run {
@@ -839,6 +1051,7 @@ class ApiServer(
                 val t0 = System.currentTimeMillis()
                 val out = withContext(heavyDispatcher) {
                     if (!RealEsrganNcnnEngine.isReady()) {
+                        requireMemory(400, "the Real-ESRGAN engine")
                         manager.setLoading("realesrgan-x4plus-ncnn", true)
                         try {
                             if (!RealEsrganNcnnEngine.init(ctx, downloader.modelDir("realesrgan-x4plus-ncnn"))) {
@@ -871,6 +1084,13 @@ class ApiServer(
                     return@post
                 }
                 switchTo("vlm", req.model)
+                lastHeavyUse = System.currentTimeMillis()
+                if (!SmolVlmEngine.nativeAvailable) {
+                    call.respond(HttpStatusCode.ServiceUnavailable, jsonOf(
+                        "error" to "will not load",
+                        "detail" to "VLM runtime (libsmolvlm_jni.so / llama.cpp mtmd) is not bundled in this build"))
+                    return@post
+                }
                 requireModelReady("smolvlm-500m-gguf")
                 val rid = req.request_id.ifEmpty { UUID.randomUUID().toString() }
                 val src = decodeB64Image(req.image)
@@ -885,6 +1105,7 @@ class ApiServer(
                 val t0 = System.currentTimeMillis()
                 val caption = withContext(heavyDispatcher) {
                     if (!SmolVlmEngine.isReady()) {
+                        requireMemory(900, "the SmolVLM engine")
                         manager.setLoading("smolvlm-500m-gguf", true)
                         try {
                             if (!SmolVlmEngine.init(ctx, downloader.modelDir("smolvlm-500m-gguf"))) {
@@ -909,8 +1130,105 @@ class ApiServer(
                 ))
             }
             post("/v1/chat/completions") {
-                // V2 mobile: vision chat goes through the PC; error shape like /v1/images/caption.
-                throw ModelWillNotLoadError("vlm smolvlm-500m not available on device (PC :8101 /v1/chat/completions works)")
+                // Vision chat on device: the same SmolVLM engine that captions,
+                // fed with the conversation text + the first image in the thread.
+                val raw = call.receiveText()
+                val root: KxJsonObject = try {
+                    Json.parseToJsonElement(raw).jsonObject
+                } catch (e: Exception) {
+                    call.respond(HttpStatusCode.BadRequest, jsonOf("error" to "body must be JSON"))
+                    return@post
+                }
+                val model = root["model"]?.jsonPrimitive?.contentOrNull ?: ""
+                val maxTokens = root["max_tokens"]?.jsonPrimitive?.intOrNull ?: 256
+                val messages: KxJsonArray = root["messages"]?.jsonArray ?: KxJsonArray(emptyList())
+
+                var prompt = ""
+                var imageB64 = ""
+                for (m in messages) {
+                    val msg = m.jsonObject
+                    val role = msg["role"]?.jsonPrimitive?.contentOrNull ?: "user"
+                    val content = msg["content"] ?: continue
+                    if (content is kotlinx.serialization.json.JsonPrimitive) {
+                        if (role != "assistant") prompt = content.contentOrNull ?: prompt
+                    } else if (content is KxJsonArray) {
+                        for (part in content) {
+                            val obj = part as? KxJsonObject ?: continue
+                            val type = obj["type"]?.jsonPrimitive?.contentOrNull ?: ""
+                            if (type == "text") {
+                                prompt = obj["text"]?.jsonPrimitive?.contentOrNull ?: prompt
+                            } else if (type == "image_url") {
+                                val iu = obj["image_url"] ?: continue
+                                val url = (iu as? KxJsonObject)?.get("url")?.jsonPrimitive?.contentOrNull
+                                    ?: iu.jsonPrimitive.contentOrNull
+                                    ?: ""
+                                if (url.startsWith("data:") && imageB64.isEmpty()) {
+                                    imageB64 = url.substringAfter(",", "")
+                                }
+                            }
+                        }
+                    }
+                }
+                if (imageB64.isEmpty()) {
+                    call.respond(HttpStatusCode.BadRequest, jsonOf(
+                        "error" to "missing image: on-device chat needs an image_url data: URL (SmolVLM is a VLM)"))
+                    return@post
+                }
+                val src = decodeB64Image(imageB64)
+                if (src == null) {
+                    call.respond(HttpStatusCode.BadRequest, jsonOf("error" to "invalid image base64"))
+                    return@post
+                }
+                switchTo("vlm", model)
+                lastHeavyUse = System.currentTimeMillis()
+                if (!SmolVlmEngine.nativeAvailable) {
+                    call.respond(HttpStatusCode.ServiceUnavailable, jsonOf(
+                        "error" to "will not load",
+                        "detail" to "VLM runtime (libsmolvlm_jni.so / llama.cpp mtmd) is not bundled in this build"))
+                    return@post
+                }
+                requireModelReady("smolvlm-500m-gguf")
+                val ctx = appContext ?: run {
+                    call.respond(HttpStatusCode.InternalServerError, jsonOf("error" to "no app context"))
+                    return@post
+                }
+                val t0 = System.currentTimeMillis()
+                val answer = withContext(heavyDispatcher) {
+                    if (!SmolVlmEngine.isReady()) {
+                        requireMemory(900, "the SmolVLM engine")
+                        manager.setLoading("smolvlm-500m-gguf", true)
+                        try {
+                            if (!SmolVlmEngine.init(ctx, downloader.modelDir("smolvlm-500m-gguf"))) {
+                                throw ModelWillNotLoadError(
+                                    "SmolVLM llama.cpp init failed: " + SmolVlmEngine.lastError, -1, -1)
+                            }
+                        } finally {
+                            manager.setLoading("smolvlm-500m-gguf", false)
+                        }
+                    }
+                    SmolVlmEngine.caption(src, prompt.ifEmpty { "Describe the image in detail." }, maxTokens)
+                }
+                src.recycle()
+                if (answer == null) {
+                    throw ModelWillNotLoadError("vlm chat failed: " + SmolVlmEngine.lastError, -1, -1)
+                }
+                call.respond(
+                    jsonOf(
+                        "id" to "chatcmpl-" + UUID.randomUUID().toString().replace("-", "").take(12),
+                        "object" to "chat.completion",
+                        "created" to System.currentTimeMillis() / 1000,
+                        "model" to "smolvlm-500m-gguf",
+                        "choices" to listOf(
+                            mapOf(
+                                "index" to 0,
+                                "message" to mapOf("role" to "assistant", "content" to answer),
+                                "finish_reason" to "stop",
+                            )
+                        ),
+                        "engine" to "smolvlm-gguf",
+                        "elapsed" to (System.currentTimeMillis() - t0) / 1000.0,
+                    ),
+                )
             }
             post("/v1/audio/transcriptions") {
                 handleAudio(call, translation = false)
@@ -1017,12 +1335,57 @@ switchTo("audio", effectiveModel) // 503 loading while switching image→audio
         if (prev == "audio" && kind != "audio") WhisperLib.release()
         if (prev == "upscale" && kind != "upscale") RealEsrganNcnnEngine.release()
         if (prev == "vlm" && kind != "vlm") SmolVlmEngine.release()
-        // Image stays resident for the common generate -> inpaint flow; free it
-        // only when another heavy engine (upscale/VLM) needs the RAM.
-        if (prev == "image" && (kind == "upscale" || kind == "vlm")) {
+        // Image stays resident for the common generate -> inpaint flow and is
+        // freed as soon as another heavy engine needs the RAM. Audio was missing
+        // here: LCM (~2-3 GB) plus whisper made the system kill the process with
+        // LOW_MEMORY during a transcription run (pid 21358, 2026-10-27 10:33).
+        if (prev == "image" && kind != "image") {
             LcmOnnxEngine.release()
         }
+        if (kind == "audio" && RealEsrganNcnnEngine.isReady()) {
+            RealEsrganNcnnEngine.release()
+        }
         return manager.ensure(kind, id)
+    }
+
+
+    /**
+     * LCM UNet works on size/8 latents and halves them three times, so the
+     * pixel size must be a multiple of 64. 288 used to slip through and ORT
+     * failed inside /up_blocks.1/Concat.
+     */
+    private fun lcmSize(requested: Int): Int {
+        val clamped = requested.coerceIn(256, 512)
+        val rounded = (clamped + 32) / 64 * 64
+        return rounded.coerceIn(256, 512)
+    }
+
+    /** Free RAM in MB as Android reports it (available, not free). */
+    private fun availableMb(): Long {
+        return try {
+            val am = appContext?.getSystemService(android.content.Context.ACTIVITY_SERVICE)
+                    as? android.app.ActivityManager ?: return Long.MAX_VALUE
+            val mi = android.app.ActivityManager.MemoryInfo()
+            am.getMemoryInfo(mi)
+            mi.availMem / 1048576
+        } catch (e: Exception) {
+            Long.MAX_VALUE
+        }
+    }
+
+    /**
+     * Refuse to load a native engine when the system is already starved.
+     * LMKD killed this process twice with reason=LOW_MEMORY while the suite had
+     * two engines resident plus other user apps; an honest 503 keeps the server
+     * (and the phone) alive.
+     */
+    private fun requireMemory(neededMb: Long, what: String) {
+        val avail = availableMb()
+        if (avail < neededMb) {
+            throw ModelWillNotLoadError(
+                "low memory: ${avail} MB available, $what needs ~${neededMb} MB. " +
+                    "Close other apps or use a smaller model.", -1, -1)
+        }
     }
 
     private fun requireModelReady(assetId: String) {
@@ -1047,6 +1410,53 @@ switchTo("audio", effectiveModel) // 503 loading while switching image→audio
         return android.util.Base64.encodeToString(baos.toByteArray(), android.util.Base64.NO_WRAP)
     }
 
+    private fun encodeB64(bmp: android.graphics.Bitmap): String {
+        val baos = java.io.ByteArrayOutputStream()
+        bmp.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, baos)
+        return android.util.Base64.encodeToString(baos.toByteArray(), android.util.Base64.NO_WRAP)
+    }
+
+    /** Replicate the edge pixels outward so the inpaint model has real context. */
+    private fun padEdge(src: android.graphics.Bitmap, l: Int, r: Int, t: Int, b: Int): android.graphics.Bitmap {
+        val w = src.width
+        val h = src.height
+        val out = android.graphics.Bitmap.createBitmap(w + l + r, h + t + b, android.graphics.Bitmap.Config.ARGB_8888)
+        val canvas = android.graphics.Canvas(out)
+        val paint = android.graphics.Paint(android.graphics.Paint.FILTER_BITMAP_FLAG)
+        val full = android.graphics.Rect(0, 0, w, h)
+        canvas.drawBitmap(src, full, android.graphics.Rect(l, t, l + w, t + h), paint)
+        if (l > 0) {
+            canvas.drawBitmap(src, android.graphics.Rect(0, 0, 1, h), android.graphics.Rect(0, t, l, t + h), paint)
+            canvas.drawBitmap(src, android.graphics.Rect(0, 0, 1, 1), android.graphics.Rect(0, 0, l, t), paint)
+            canvas.drawBitmap(src, android.graphics.Rect(0, h - 1, 1, h), android.graphics.Rect(0, t + h, l, t + h + b), paint)
+        }
+        if (r > 0) {
+            canvas.drawBitmap(src, android.graphics.Rect(w - 1, 0, w, h), android.graphics.Rect(l + w, t, l + w + r, t + h), paint)
+            canvas.drawBitmap(src, android.graphics.Rect(w - 1, 0, w, 1), android.graphics.Rect(l + w, 0, l + w + r, t), paint)
+            canvas.drawBitmap(src, android.graphics.Rect(w - 1, h - 1, w, h), android.graphics.Rect(l + w, t + h, l + w + r, t + h + b), paint)
+        }
+        if (t > 0) {
+            canvas.drawBitmap(src, android.graphics.Rect(0, 0, w, 1), android.graphics.Rect(l, 0, l + w, t), paint)
+        }
+        if (b > 0) {
+            canvas.drawBitmap(src, android.graphics.Rect(0, h - 1, w, h), android.graphics.Rect(l, t + h, l + w, t + h + b), paint)
+        }
+        return out
+    }
+
+    /** White border (repaint area) on a black canvas. */
+    private fun borderMask(w: Int, h: Int, l: Int, r: Int, t: Int, b: Int): android.graphics.Bitmap {
+        val mask = android.graphics.Bitmap.createBitmap(w, h, android.graphics.Bitmap.Config.ARGB_8888)
+        val canvas = android.graphics.Canvas(mask)
+        canvas.drawColor(android.graphics.Color.BLACK)
+        val paint = android.graphics.Paint().apply { color = android.graphics.Color.WHITE }
+        if (l > 0) canvas.drawRect(0f, 0f, l.toFloat(), h.toFloat(), paint)
+        if (r > 0) canvas.drawRect((w - r).toFloat(), 0f, w.toFloat(), h.toFloat(), paint)
+        if (t > 0) canvas.drawRect(0f, 0f, w.toFloat(), t.toFloat(), paint)
+        if (b > 0) canvas.drawRect(0f, (h - b).toFloat(), w.toFloat(), h.toFloat(), paint)
+        return mask
+    }
+
     private fun parseHexColor(hex: String): Int {
         return try {
             val h = hex.trim().removePrefix("#")
@@ -1066,10 +1476,6 @@ switchTo("audio", effectiveModel) // 503 loading while switching image→audio
     }
 
     companion object {
-/** 1×1 PNG stub until the ONNX engine is wired. */
-        const val STUB_PNG_B64 =
-            "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=="
-
         val ALLOWED_AUDIO_EXT = setOf(
             "wav", "mp3", "m4a", "ogg", "flac", "webm", "mp4", "mov", "avi", "mkv",
         )
