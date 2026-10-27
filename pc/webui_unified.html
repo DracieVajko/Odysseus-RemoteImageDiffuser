@@ -181,6 +181,7 @@ canvas#maskpad { width: 100%; border-radius: 6px; border: 1px solid var(--border
 <div><label><input type="checkbox" id="trsplit"> Split into 30s chunks (remote WhisperApi only)</label></div>
 </div>
 <button class="go" id="btnTr" onclick="generateTr()">Transcribe</button>
+<div class="hint" id="trjob"><span id="trjobText"></span> <a href="#" id="trstop" style="display:none;color:#ff7b72" onclick="cancelJob();return false">stop</a></div>
 <div id="txtout">transcript appears here…</div>
 <a href="#" id="trsave" style="display:none;color:#58a6ff;font-size:12px" onclick="saveTranscript();return false">Save transcript</a>
 </div>
@@ -664,6 +665,39 @@ async function generateUp(){
     log('done in '+secs+'s');
   } catch(e){ log('ERROR: '+e); } finally { btn.disabled=false; btn.textContent='Upscale'; refresh(); }
 }
+let JOB_TIMER = null;
+let JOB_RID = null;
+function watchJob(rid){
+  JOB_RID = rid;
+  const text = document.getElementById('trjobText');
+  const stop = document.getElementById('trstop');
+  stop.style.display = 'inline';
+  clearInterval(JOB_TIMER);
+  JOB_TIMER = setInterval(async () => {
+    try {
+      const j = await (await fetch('/v1/jobs/' + rid)).json();
+      if(j.state === 'running'){
+        const pct = j.percent || 0;
+        const done = Math.round(j.done || 0), total = Math.round(j.total || 0);
+        text.textContent = 'job ' + pct + '%' + (total ? ' (' + done + '/' + total + ' s)' : '') +
+          (j.message ? ' · ' + j.message : '');
+      } else {
+        text.textContent = 'job ' + j.state + (j.error ? ': ' + j.error : '');
+        stop.style.display = 'none';
+        clearInterval(JOB_TIMER);
+      }
+    } catch(e){ /* job gone */ }
+  }, 2000);
+}
+async function cancelJob(){
+  if(!JOB_RID) return;
+  try {
+    const j = await (await fetch('/v1/jobs/' + JOB_RID + '/cancel', {method:'POST'})).json();
+    log('cancel: ' + JSON.stringify(j));
+    document.getElementById('trjobText').textContent = 'cancelling…';
+  } catch(e){ log('cancel error: ' + e); }
+}
+
 async function generateTr(){
   const btn = document.getElementById('btnTr');
   const f = document.getElementById('trfile').files[0];
@@ -674,6 +708,9 @@ async function generateTr(){
   }
   const fd = new FormData();
   fd.append('file', f);
+  const rid = rid();
+  fd.append('request_id', rid);
+  watchJob(rid);
   const model = document.getElementById('trmodel').value || 'small';
   fd.append('model', model);
   const lang = document.getElementById('trlang').value;
@@ -701,7 +738,11 @@ async function generateTr(){
     document.getElementById('txtout').textContent = '['+(j.language||'?')+' · '+(j.engine||'?')+' · '+secs+'s]\n'+(j.text||'(empty)');
     document.getElementById('trsave').style.display='inline';
     log('transcribed in '+secs+'s engine='+(j.engine||'?'));
-  } catch(e){ log('ERROR: '+e); } finally { btn.disabled=false; btn.textContent='Transcribe'; refresh(); }
+  } catch(e){ log('ERROR: '+e); } finally {
+    btn.disabled=false; btn.textContent='Transcribe';
+    document.getElementById('trstop').style.display='none';
+    refresh();
+  }
 }
 async function generateCap(){
   const btn = document.getElementById('btnCap');

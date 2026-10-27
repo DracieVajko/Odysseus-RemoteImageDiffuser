@@ -710,3 +710,20 @@ Android (`Android/data/<pkg>/files/output/<kind>/`):
       files (kind/name/size); tapping opens the file through a FileProvider
       (`<pkg>.files`), "Save all to Downloads" copies everything into the public
       `Download/Prism` folder, and "Open folder path" shows the exact path.
+
+## Job progress and cancellation (2026-10-27)
+
+- [x] `GET /v1/jobs`, `GET /v1/jobs/{id}`, `POST /v1/jobs/{id}/cancel` with
+      `state`, `percent`, `done`/`total` seconds, `elapsed` and `message`.
+- [x] Long transcriptions (>10 min) run in 5-minute chunks with the tail of the
+      previous text as `initial_prompt`, because faster-whisper decodes the
+      whole file before yielding the first segment (no progress, no cancel).
+      Context is preserved, and the cancel point is the chunk boundary.
+- [x] Cancelling answers 409 `{"error": "cancelled"}`. The `JobCancelled`
+      exception is re-raised before the proxy fallback — without that, the
+      cancel was swallowed and the request continued against the remote
+      WhisperApi (first run reported `done` after one chunk).
+- [x] WebUI: the Transcribe tab polls `/v1/jobs/{id}` and shows
+      `job 40% (120/300 s) · chunk 1/2` with a Stop link.
+- [ ] Not done yet: batch queue, Android video re-encode/compress, on-device
+      subtitle verification (needs the phone free with START pressed).

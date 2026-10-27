@@ -811,3 +811,12 @@ the same with `canonicalFile` + a path-prefix check.
 **Evidence.** PC: 384x384 PNG (262 794 B) written, listed, downloaded and
 deleted; traversal refused. Android: 118 842 B PNG listed and downloaded as a
 valid 256x256 PNG, an ffmpeg MP3 stored in the same tree, delete honoured.
+
+**Long transcriptions are chunked (2026-10-27).** `faster_whisper.transcribe()`
+returns a generator that is consumed *before* the first segment reaches the
+caller (the VAD/timestamp restore pass fills a list), so a single pass cannot
+report progress and cannot be interrupted. Files longer than ten minutes are
+split into 300 s chunks and transcribed sequentially with the previous text as
+`initial_prompt`; progress is per chunk and `POST /v1/jobs/{id}/cancel` is
+honoured at the boundary. On a CPU-bound machine a chunk can take minutes, so
+the cancel latency is bounded by the chunk, not by the request.
