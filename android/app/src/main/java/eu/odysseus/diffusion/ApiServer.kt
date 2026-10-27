@@ -22,8 +22,10 @@ import io.ktor.server.request.httpMethod
 import io.ktor.server.request.receiveMultipart
 import io.ktor.server.request.receiveText
 import io.ktor.server.response.respond
+import io.ktor.server.response.respondFile
 import io.ktor.server.response.respondText
 import io.ktor.http.ContentType
+import io.ktor.server.routing.delete
 import io.ktor.server.routing.get
 import io.ktor.server.routing.post
 import io.ktor.server.routing.routing
@@ -656,6 +658,64 @@ class ApiServer(
             }
 // FFmpeg Tools: not available on device yet (MediaCodec covers audio
 // decoding for whisper).
+            get("/v1/outputs") {
+                val ctx = appContext ?: run {
+                    call.respond(HttpStatusCode.InternalServerError,
+                        jsonOf("error" to "no app context"))
+                    return@get
+                }
+                val limit = (call.request.queryParameters["limit"] ?: "200").toIntOrNull() ?: 200
+                val files = OutputStore.list(ctx, limit.coerceIn(1, 1000))
+                call.respond(
+                    jsonOf(
+                        "dir" to OutputStore.root(ctx).absolutePath,
+                        "count" to files.size,
+                        "engine" to "android-outputs",
+                        "files" to files.map { f ->
+                            val kind = f.parentFile?.name ?: ""
+                            jsonOf(
+                                "name" to f.name,
+                                "kind" to kind,
+                                "size" to f.length(),
+                                "mtime" to f.lastModified() / 1000,
+                                "path" to "$kind/${f.name}",
+                                "url" to "/v1/outputs/$kind/${f.name}",
+                            )
+                        },
+                    ),
+                )
+            }
+            get("/v1/outputs/{rel...}") {
+                val ctx = appContext ?: run {
+                    call.respond(HttpStatusCode.InternalServerError,
+                        jsonOf("error" to "no app context"))
+                    return@get
+                }
+                val rel = call.parameters.getAll("rel")?.joinToString("/") ?: ""
+                val rootDir = OutputStore.root(ctx).canonicalFile
+                val target = File(rootDir, rel).canonicalFile
+                if (!target.path.startsWith(rootDir.path) || !target.isFile) {
+                    call.respond(HttpStatusCode.NotFound, jsonOf("error" to "not found"))
+                    return@get
+                }
+                call.respondFile(target)
+            }
+            delete("/v1/outputs/{rel...}") {
+                val ctx = appContext ?: run {
+                    call.respond(HttpStatusCode.InternalServerError,
+                        jsonOf("error" to "no app context"))
+                    return@delete
+                }
+                val rel = call.parameters.getAll("rel")?.joinToString("/") ?: ""
+                val rootDir = OutputStore.root(ctx).canonicalFile
+                val target = File(rootDir, rel).canonicalFile
+                if (!target.path.startsWith(rootDir.path) || !target.isFile) {
+                    call.respond(HttpStatusCode.NotFound, jsonOf("error" to "not found"))
+                    return@delete
+                }
+                val ok = OutputStore.delete(target)
+                call.respond(jsonOf("removed" to rel, "ok" to ok))
+            }
             get("/v1/ffmpeg/presets") {
                 call.respond(MediaTools.presetsJson())
             }
@@ -734,6 +794,11 @@ class ApiServer(
                             "elapsed" to 0,
                             "request_id" to httpRid,
                             "engine" to "android-mediacodec",
+                            "outputs" to outputList(
+                                runCatching {
+                                    OutputStore.store(ctx, "image", "." + fileOut.name.substringAfterLast('.'),
+                                                      fileOut.bytes, httpRid)
+                                }.getOrNull()),
                             "info" to info,
                         ),
                     )
@@ -820,6 +885,7 @@ class ApiServer(
                         "size" to "${side}x${side}",
                         "requested_size" to "${w}x${h}",
                         "engine" to "onnx-lcm",
+                        "outputs" to images.mapNotNull { storeB64("image", ".png", it, rid) },
                     ),
                 )
             }
@@ -899,6 +965,7 @@ class ApiServer(
                         "data" to List(n.coerceIn(1, 4)) { jsonOf("b64_json" to b64) },
                         "request_id" to rid,
                         "engine" to "onnx-lcm",
+                        "outputs" to outputList(storeB64("image", ".png", b64, rid)),
                     ),
                 )
             }
@@ -957,7 +1024,9 @@ class ApiServer(
                 val elapsed = (System.currentTimeMillis() - t0) / 1000.0
                 val b64 = bitmapToB64(out)
                 out.recycle()
-                call.respond(jsonOf("image" to b64, "elapsed" to elapsed, "request_id" to rid, "engine" to "onnx"))
+                call.respond(jsonOf("image" to b64, "elapsed" to elapsed, "request_id" to rid,
+                    "engine" to "onnx",
+                    "outputs" to outputList(storeB64("image", ".png", b64, rid))))
             }
             post("/v1/images/outpaint") {
                 val req = wireJson.decodeFromString<OutpaintReq>(call.receiveText())
@@ -1046,6 +1115,7 @@ class ApiServer(
                         "elapsed" to (System.currentTimeMillis() - t0) / 1000.0,
                         "request_id" to rid,
                         "engine" to "onnx-outpaint",
+                        "outputs" to outputList(storeB64("image", ".png", b64, rid)),
                         "input_size" to listOf(inW, inH),
                         "output_size" to listOf(newW, newH),
                         "margins" to mapOf("left" to l, "right" to r, "top" to t, "bottom" to b),
@@ -1148,6 +1218,7 @@ class ApiServer(
                     "elapsed" to elapsed,
                     "request_id" to rid,
                     "engine" to "realesrgan-ncnn",
+                    "outputs" to outputList(storeB64("image", ".png", b64, rid)),
                 ))
             }
             post("/v1/images/caption") {
@@ -1197,6 +1268,7 @@ class ApiServer(
                 val elapsed = (System.currentTimeMillis() - t0) / 1000.0
                 call.respond(jsonOf(
                     "caption" to caption,
+                    "outputs" to outputList(storeText(caption, rid)),
                     "elapsed" to elapsed,
                     "request_id" to rid,
                     "engine" to "smolvlm-llama",
@@ -1299,6 +1371,7 @@ class ApiServer(
                             )
                         ),
                         "engine" to "smolvlm-gguf",
+                        "outputs" to outputList(storeText(answer, "")),
                         "elapsed" to (System.currentTimeMillis() - t0) / 1000.0,
                     ),
                 )
@@ -1392,6 +1465,7 @@ switchTo("audio", effectiveModel) // 503 loading while switching image→audio
         call.respond(
             jsonOf(
                 "text" to text,
+                "outputs" to outputList(storeText(text, "")),
                 "language" to language,
                 "model" to effectiveModel,
                 "requested_model" to model,
@@ -1467,6 +1541,23 @@ switchTo("audio", effectiveModel) // 503 loading while switching image→audio
         }
     }
 
+
+    // ---------- output store (shared with the UI) ----------
+    private fun storeB64(kind: String, ext: String, b64: String, rid: String): Map<String, Any>? =
+        runCatching {
+            val ctx = appContext ?: return null
+            val bytes = android.util.Base64.decode(b64, android.util.Base64.DEFAULT)
+            OutputStore.store(ctx, kind, ext, bytes, rid)
+        }.getOrNull()
+
+    private fun storeText(text: String, rid: String, ext: String = ".txt"): Map<String, Any>? =
+        runCatching {
+            val ctx = appContext ?: return null
+            OutputStore.store(ctx, "text", ext, text.toByteArray(), rid)
+        }.getOrNull()
+
+    private fun outputList(v: Map<String, Any>?): List<Map<String, Any>> =
+        if (v == null) emptyList() else listOf(v)
 
     private fun decodeB64Image(b64: String): android.graphics.Bitmap? {
         return try {

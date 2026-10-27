@@ -57,6 +57,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var btnAddModel: MaterialButton
     private lateinit var modelsContainer: LinearLayout
     private lateinit var settingsInfo: TextView
+    private lateinit var btnOutputs: android.widget.Button
 
     // action UI
     private lateinit var genPrompt: EditText
@@ -167,6 +168,8 @@ class MainActivity : AppCompatActivity() {
         btnAddModel = findViewById(R.id.btnAddModel)
         modelsContainer = findViewById(R.id.modelsContainer)
         settingsInfo = findViewById(R.id.settingsInfo)
+        btnOutputs = findViewById(R.id.btnOutputs)
+        btnOutputs.setOnClickListener { showOutputsDialog() }
         spinnerTheme = findViewById(R.id.spinnerTheme)
         spinnerLanguage = findViewById(R.id.spinnerLanguage)
         spinnerAcceleration = findViewById(R.id.spinnerAcceleration)
@@ -317,6 +320,59 @@ class MainActivity : AppCompatActivity() {
         // `am start` on an already running activity delivers here, not to onCreate.
         if (intent?.getBooleanExtra("start_server", false) == true && !serverRunning) {
             window.decorView.post { toggleServer() }
+        }
+    }
+
+    /** Default output folder browser: open, share and clear what the jobs produced. */
+    private fun showOutputsDialog() {
+        val files = OutputStore.list(this, 200)
+        val (count, bytes) = OutputStore.total(this)
+        if (files.isEmpty()) {
+            toast("No outputs yet")
+            return
+        }
+        val labels = files.map {
+            val kind = it.parentFile?.name ?: ""
+            "$kind/${it.name}  (${Math.max(1, it.length() / 1024)} KB)"
+        }.toTypedArray()
+        android.app.AlertDialog.Builder(this)
+            .setTitle("Outputs · $count files, ${bytes / 1048576} MB")
+            .setItems(labels) { _, which -> openOutputFile(files[which]) }
+            .setPositiveButton("Save all to Downloads") { _, _ ->
+                Thread {
+                    val n = OutputStore.saveAllToDownloads(this)
+                    handler.post { toast("Saved $n file(s) to Download/Prism") }
+                }.start()
+            }
+            .setNeutralButton("Open folder path") { _, _ ->
+                toast(OutputStore.root(this).absolutePath)
+                log("outputs: " + OutputStore.root(this).absolutePath)
+            }
+            .setNegativeButton("Close", null)
+            .show()
+    }
+
+    private fun openOutputFile(file: java.io.File) {
+        val mime = when (file.extension.lowercase()) {
+            "png" -> "image/png"
+            "jpg", "jpeg" -> "image/jpeg"
+            "webp" -> "image/webp"
+            "mp4" -> "video/mp4"
+            "m4a" -> "audio/mp4"
+            "mp3" -> "audio/mpeg"
+            "wav" -> "audio/wav"
+            else -> "text/plain"
+        }
+        try {
+            val uri = androidx.core.content.FileProvider.getUriForFile(
+                this, "$packageName.files", file)
+            startActivity(Intent(Intent.ACTION_VIEW).apply {
+                setDataAndType(uri, mime)
+                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            })
+        } catch (e: Exception) {
+            toast("No app can open ${file.name}")
+            log("open output failed: ${e.message}")
         }
     }
 

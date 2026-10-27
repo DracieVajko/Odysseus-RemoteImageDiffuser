@@ -178,6 +178,13 @@
                             android:textSize="11sp"
                             android:textStyle="bold" />
 
+                        <Button
+                            android:id="@+id/btnOutputs"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:layout_marginTop="8dp"
+                            android:text="Outputs" />
+
                         <TextView
                             android:id="@+id/settingsInfo"
                             android:layout_width="match_parent"

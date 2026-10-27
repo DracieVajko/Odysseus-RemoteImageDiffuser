@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<paths>
+    <!-- Job outputs live in Android/data/<pkg>/files/output/ -->
+    <external-files-path name="outputs" path="output/" />
+    <files-path name="internal_outputs" path="output/" />
+    <cache-path name="cache" path="." />
+</paths>
