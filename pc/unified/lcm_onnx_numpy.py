@@ -86,6 +86,23 @@ class LcmOnnxNumpy:
                      if "CUDAExecutionProvider" in avail else ["CPUExecutionProvider"])
         else:
             provs = ["CPUExecutionProvider"]
+        # A resident diffusers pipeline and this LCM session cannot share a 6 GB
+        # card: co-residency produced "CUDA failure 719: unspecified launch
+        # failure" and took the whole server down. If CUDA has less than 2.5 GB
+        # free, run this pipeline on the CPU instead.
+        if "CUDAExecutionProvider" in provs:
+            try:
+                import torch
+                if torch.cuda.is_available():
+                    free_b, _total = torch.cuda.mem_get_info()
+                    free_mb = free_b / 1048576
+                    if free_mb < 2500:
+                        logger.warning(
+                            "LCM ONNX: only %.0f MB VRAM free -> CPU provider "
+                            "(a torch pipeline is resident)", free_mb)
+                        provs = ["CPUExecutionProvider"]
+            except Exception:
+                pass
         logger.info("ONNX providers: %s", provs)
         so = ort.SessionOptions()
         so.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_BASIC
@@ -366,13 +383,37 @@ def _png_bytes(arr) -> bytes:
 
 
 _PIPELINE = None
+# Set when ONNX Runtime reports a CUDA failure: the context is gone for the
+# rest of the process, so every later pipeline must be built on the CPU.
+_CUDA_FAILED = False
 
 
 def _pipeline(model_dir: Path) -> LcmOnnxNumpy:
     global _PIPELINE
     if _PIPELINE is None:
-        _PIPELINE = LcmOnnxNumpy(model_dir)
+        _PIPELINE = LcmOnnxNumpy(model_dir, use_gpu=False if _CUDA_FAILED else None)
     return _PIPELINE
+
+
+def _run_with_cuda_fallback(fn, model_dir: Path):
+    """Run a pipeline call; on a CUDA failure rebuild on CPU and retry once."""
+    global _CUDA_FAILED, _PIPELINE
+    try:
+        return fn()
+    except Exception as e:
+        msg = str(e)
+        if "CUDA" not in msg and "cuda" not in msg:
+            raise
+        logger.warning("ONNX CUDA failure (%s); rebuilding the pipeline on CPU",
+                       msg[:160])
+        _CUDA_FAILED = True
+        _PIPELINE = None
+        try:
+            import gc
+            gc.collect()
+        except Exception:
+            pass
+        return fn()
 
 
 def release_pipeline() -> bool:
@@ -390,15 +431,19 @@ def release_pipeline() -> bool:
 
 def generate_b64(model_dir: Path, prompt: str, negative_prompt: str = "", guidance: float = 1.0,
                  size: int = 512, steps: int = 6, seed: int = 1) -> str:
-    img = _pipeline(model_dir).generate(prompt, negative_prompt, guidance, size, steps, seed)
+    img = _run_with_cuda_fallback(
+        lambda: _pipeline(model_dir).generate(prompt, negative_prompt, guidance, size, steps, seed),
+        model_dir)
     return _pil_to_b64(img)
 
 
 def img2img_b64(model_dir: Path, image_b64: str, prompt: str, negative_prompt: str = "",
                 guidance: float = 1.0, strength: float = 0.75, size: int = 512,
                 steps: int = 6, seed: int = 1) -> str:
-    img = _pipeline(model_dir).img2img(image_b64, prompt, negative_prompt, guidance,
-                                       strength, size, steps, seed)
+    img = _run_with_cuda_fallback(
+        lambda: _pipeline(model_dir).img2img(image_b64, prompt, negative_prompt, guidance,
+                                             strength, size, steps, seed),
+        model_dir)
     return _pil_to_b64(img)
 
 
@@ -406,6 +451,8 @@ def inpaint_b64(model_dir: Path, image_b64: str, mask_b64: str, prompt: str,
                 negative_prompt: str = "", guidance: float = 1.0, strength: float = 0.8,
                 size: int = 512, steps: int = 6, seed: int = 1,
                 mode: str = "add", color: str = "#0066ff") -> str:
-    img = _pipeline(model_dir).inpaint(image_b64, mask_b64, prompt, negative_prompt, guidance,
-                                       strength, size, steps, seed, mode, color)
+    img = _run_with_cuda_fallback(
+        lambda: _pipeline(model_dir).inpaint(image_b64, mask_b64, prompt, negative_prompt,
+                                             guidance, strength, size, steps, seed, mode, color),
+        model_dir)
     return _pil_to_b64(img)

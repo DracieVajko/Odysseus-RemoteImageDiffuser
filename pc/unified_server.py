@@ -667,6 +667,9 @@ def inpaint(req: InpaintRequest):
         return JSONResponse(status_code=400, content={"error": "missing image b64"})
     t0 = time.time()
     _release_vlm_best_effort()
+    # One big engine at a time on a 6 GB card: a resident diffusers pipeline
+    # starved the ONNX inpaint and the request hung for minutes.
+    _release_sd_best_effort()
     # Real pipeline when the engine is loaded (masks = removing people in the background),
     # otherwise echo the input — the contract {image, elapsed, request_id} always holds.
     if req.mask:
@@ -792,6 +795,7 @@ def outpaint(req: OutpaintRequest):
             "error": f"result too large: {new_w}x{new_h} (max {MAX_OUTPAINT_PIXELS} pixels)"})
 
     t0 = time.time()
+    _release_sd_best_effort()
     padded = _edge_pad_image(src, left, right, top, bottom)
     mask = _border_mask(new_w, new_h, left, right, top, bottom)
     size = max(256, min(512, max(new_w, new_h)))
@@ -844,6 +848,7 @@ def upscale(req: UpscaleRequest):
         return _raise_loading(e)
     if not req.image:
         return JSONResponse(status_code=400, content={"error": "missing image b64"})
+    _release_sd_best_effort()
     try:
         out = upscale_image_b64(req.image, req.scale, req.model or "RealESRGAN_x4v3")
     except ValueError as e:
