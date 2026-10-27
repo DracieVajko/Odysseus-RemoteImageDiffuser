@@ -158,6 +158,28 @@ data class OutpaintReq(
 )
 
 @Serializable
+data class BatchReq(
+    val jobs: List<Map<String, String>> = emptyList(),
+    val stop_on_error: Boolean = true,
+    val request_id: String = "",
+)
+
+data class BatchState(
+    val id: String,
+    val total: Int,
+    val stopOnError: Boolean,
+) {
+    var state: String = "running"
+    var done: Int = 0
+    var percent: Int = 0
+    var message: String = ""
+    var error: String = ""
+    @Volatile var cancelled: Boolean = false
+    val results: java.util.concurrent.CopyOnWriteArrayList<Map<String, Any>> =
+        java.util.concurrent.CopyOnWriteArrayList()
+}
+
+@Serializable
 data class CaptionReq(
     val image: String = "",
     val prompt: String = "Describe the image in detail.",
@@ -216,6 +238,7 @@ class ApiServer(
     private val appContext: android.content.Context? = null,
 ) {
     private val progress = ConcurrentHashMap<String, JobProgress>()
+private val batchState = ConcurrentHashMap<String, BatchState>()
     private var engine: NettyApplicationEngine? = null
 
     // Heavy inference is serialized: two concurrent ORT runs crashed with
@@ -230,6 +253,90 @@ class ApiServer(
     // and friends, residency beyond a minute is what got this process killed
     // with reason=LOW_MEMORY (twice) and restarted the launcher with it.
     @Volatile private var lastHeavyUse = 0L
+
+    /**
+     * Run a single batch job on the heavy dispatcher. Kept as a member so the
+     * private helpers (parseSize, decodeB64Image, switchTo, requireModelReady,
+     * mobileSteps, OutputStore) are reachable without qualifying `this`.
+     */
+    private suspend fun runBatchJob(bid: String, index: Int, job: Map<String, String>,
+                                   ctx: android.content.Context) {
+        val type = (job["type"] ?: job["kind"] ?: "").lowercase()
+        val bs = batchState[bid] ?: return
+        try {
+            when (type) {
+                "generate" -> {
+                    val modelId = job.getOrElse("model") { "lcm-dreamshaper-int8-onnx" }
+                    if (!downloader.isReady(modelId)) throw ModelWillNotLoadError("model $modelId not downloaded", -1, -1)
+                    if (!LcmOnnxEngine.isReady()) {
+                        manager.setLoading(modelId, true)
+                        try {
+                            if (!LcmOnnxEngine.init(ctx, downloader.modelDir(modelId))) {
+                                throw ModelWillNotLoadError("LCM init failed: " + LcmOnnxEngine.lastError, -1, -1)
+                            }
+                        } finally { manager.setLoading(modelId, false) }
+                    }
+                    val (w, h) = parseSize(job.getOrElse("size") { "512x512" }) ?: Pair(512, 512)
+                    val side = maxOf(w, h).coerceIn(256, 512)
+                    val steps = mobileSteps(job["quality"], job["steps"]?.toIntOrNull())
+                    val bmp = LcmOnnxEngine.generate(
+                        job.getOrElse("prompt") { "" },
+                        job.getOrElse("negative_prompt") { "" },
+                        (job.getOrElse("guidance") { "1.0" }).toFloat(),
+                        steps, side,
+                        seed = System.nanoTime() + index,
+                    ) ?: throw ModelWillNotLoadError("generate failed: " + LcmOnnxEngine.lastError, -1, -1)
+                    val baos = java.io.ByteArrayOutputStream()
+                    bmp.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, baos)
+                    bmp.recycle()
+                    val meta = OutputStore.store(ctx, "image", ".png", baos.toByteArray(), bid)
+                    bs.results.add(mapOf("index" to index, "type" to "generate", "ok" to true,
+                        "size" to "${side}x${side}", "engine" to "onnx-lcm",
+                        "outputs" to listOf(meta)))
+                }
+                "upscale" -> {
+                    val src = decodeB64Image(job.getOrElse("image") { "" })
+                        ?: throw ModelWillNotLoadError("bad image base64", -1, -1)
+                    switchTo("upscale", job.getOrElse("model") { "realesrgan-x4plus-ncnn" })
+                    requireModelReady("realesrgan-x4plus-ncnn")
+                    val scale = (job.getOrElse("scale") { "2" }).toIntOrNull() ?: 2
+                    if (src.width * scale > 1536 || src.height * scale > 1536) {
+                        src.recycle()
+                        throw ModelWillNotLoadError("upscaled side exceeds the mobile cap 1536", -1, -1)
+                    }
+                    val out = withContext(heavyDispatcher) {
+                        if (!RealEsrganNcnnEngine.isReady()) {
+                            manager.setLoading("realesrgan-x4plus-ncnn", true)
+                            try {
+                                if (!RealEsrganNcnnEngine.init(ctx, downloader.modelDir("realesrgan-x4plus-ncnn"))) {
+                                    throw ModelWillNotLoadError("ncnn init failed: " + RealEsrganNcnnEngine.lastError, -1, -1)
+                                }
+                            } finally { manager.setLoading("realesrgan-x4plus-ncnn", false) }
+                        }
+                        RealEsrganNcnnEngine.upscale(src, scale)
+                    }
+                    src.recycle()
+                    if (out == null) throw ModelWillNotLoadError("upscale failed: " + RealEsrganNcnnEngine.lastError, -1, -1)
+                    val baos = java.io.ByteArrayOutputStream()
+                    out.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, baos)
+                    val bytes = baos.toByteArray()
+                    out.recycle()
+                    val meta = OutputStore.store(ctx, "image", ".png", bytes, bid)
+                    bs.results.add(mapOf("index" to index, "type" to "upscale", "ok" to true,
+                        "size" to "${out.width}x${out.height}", "engine" to "realesrgan-ncnn",
+                        "outputs" to listOf(meta)))
+                }
+                else -> throw IllegalArgumentException("unknown job type: $type")
+            }
+        } catch (e: Exception) {
+            bs.results.add(mapOf("index" to index, "type" to type, "ok" to false,
+                "error" to (e.message ?: e.javaClass.simpleName)))
+            if (bs.stopOnError) { bs.state = "error"; bs.error = e.message ?: ""; return }
+        }
+        bs.done = index + 1
+        bs.percent = (100 * bs.done) / bs.total
+        bs.message = "job ${index + 1}/${bs.total}"
+    }
 
     fun start(wait: Boolean = false): NettyApplicationEngine {
 // Explicit 0.0.0.0: the default bind may be IPv6-only ([::]), which adb forward
@@ -634,6 +741,52 @@ class ApiServer(
                 }
                 val ok = downloader.uninstall(id)
                 call.respond(jsonOf("id" to id, "removed" to ok))
+            }
+            post("/v1/batch") {
+                val body = call.receiveText()
+                val req = try { wireJson.decodeFromString<BatchReq>(body) } catch (e: Exception) {
+                    call.respond(HttpStatusCode.BadRequest, jsonOf("error" to "body must be JSON"))
+                    return@post
+                }
+                if (req.jobs.isEmpty()) {
+                    call.respond(HttpStatusCode.BadRequest, jsonOf("error" to "no jobs"))
+                    return@post
+                }
+                val bid = req.request_id.ifEmpty { UUID.randomUUID().toString() }
+                val ctx = appContext ?: run {
+                    call.respond(HttpStatusCode.InternalServerError, jsonOf("error" to "no app context"))
+                    return@post
+                }
+                val bs = BatchState(bid, req.jobs.size, req.stop_on_error)
+                batchState[bid] = bs
+                launch(heavyDispatcher) {
+                    for ((i, job) in req.jobs.withIndex()) {
+                        if (bs.cancelled) { bs.state = "cancelled"; break }
+                        runBatchJob(bid, i, job, ctx)
+                        if (bs.state == "error" && bs.stopOnError) break
+                    }
+                    if (bs.state == "running") bs.state = "done"
+                    bs.percent = 100
+                }
+                call.respond(jsonOf("id" to bid, "state" to "running", "total" to req.jobs.size,
+                    "request_id" to bid))
+            }
+            get("/v1/batch/{id}") {
+                val id = call.parameters["id"] ?: ""
+                val bs = batchState[id] ?: return@get call.respond(
+                    HttpStatusCode.NotFound, jsonOf("error" to "unknown batch"))
+                call.respond(jsonOf(
+                    "id" to bs.id, "state" to bs.state, "total" to bs.total, "done" to bs.done,
+                    "percent" to bs.percent, "message" to bs.message, "error" to bs.error,
+                    "results" to bs.results,
+                ))
+            }
+            post("/v1/batch/{id}/cancel") {
+                val id = call.parameters["id"] ?: ""
+                val bs = batchState[id] ?: return@post call.respond(
+                    HttpStatusCode.NotFound, jsonOf("error" to "unknown batch"))
+                bs.cancelled = true
+                call.respond(jsonOf("id" to id, "state" to "cancelling", "cancelled" to true))
             }
             get("/v1/settings") {
                 val rt = Runtime.getRuntime()
@@ -1170,7 +1323,7 @@ class ApiServer(
                 }
                 switchTo("upscale", req.model)
                 lastHeavyUse = System.currentTimeMillis()
-                requireModelReady("realesrgan-x4plus-ncnn")
+                this@ApiServer.requireModelReady("realesrgan-x4plus-ncnn")
                 val rid = req.request_id.ifEmpty { UUID.randomUUID().toString() }
                 val src = decodeB64Image(req.image)
                 if (src == null) {
