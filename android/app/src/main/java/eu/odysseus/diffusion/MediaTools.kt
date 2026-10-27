@@ -38,8 +38,7 @@ object MediaTools {
         "mp4-h265" to mapOf("desc" to "MP4 H.265 (remux when the source is already HEVC)", "ext" to ".mp4", "vcodec" to "h265", "supported" to true),
         "mp4-h264-fast" to mapOf("desc" to "MP4 H.264 fast (remux)", "ext" to ".mp4", "vcodec" to "h264", "supported" to true),
         "mp4-h265-fast" to mapOf("desc" to "MP4 H.265 fast (remux)", "ext" to ".mp4", "vcodec" to "h265", "supported" to true),
-        "mp4-small" to mapOf("desc" to "MP4 small (needs a video re-encode)", "ext" to ".mp4", "supported" to false,
-                             "reason" to "video re-encode needs a GPU/EGL pipeline, not implemented on device"),
+        "mp4-small" to mapOf("desc" to "MP4 small (re-encoded to ~5 MB)", "ext" to ".mp4", "supported" to true),
         "webm" to mapOf("desc" to "WebM (VP9 encode)", "ext" to ".webm", "supported" to false,
                         "reason" to "VP9 encoding is not implemented on device"),
     )
@@ -563,5 +562,5 @@ object MediaTools {
     }
 
     fun compress(input: File, preset: String): Output =
-        throw Unsupported("compression needs a video re-encode (EGL/MediaCodec pipeline), not implemented on device")
+        VideoTranscoder.compress(input, preset)
 }
