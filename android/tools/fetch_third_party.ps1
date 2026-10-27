@@ -21,3 +21,17 @@ if (!(Test-Path (Join-Path $llama "include\llama.h"))) {
 } else {
   Write-Host "llama.cpp already present, skipping."
 }
+# libmp3lame (LGPL) powers the MP3 presets: Android has no MP3 encoder.
+$lame = Join-Path (Split-Path -Parent $PSScriptRoot) "third_party\lame"
+if (!(Test-Path (Join-Path $lame "libmp3lame\lame.c"))) {
+  $tgz = Join-Path $env:TEMP "lame-3.100.tar.gz"
+  New-Item -ItemType Directory -Force -Path (Split-Path -Parent $lame) | Out-Null
+  curl.exe -sS -L --max-time 900 -o $tgz "https://downloads.sourceforge.net/project/lame/lame/3.100/lame-3.100.tar.gz"
+  $tmp = Join-Path $env:TEMP "lame-extract"
+  New-Item -ItemType Directory -Force -Path $tmp | Out-Null
+  tar.exe -xzf $tgz -C $tmp
+  Move-Item (Join-Path $tmp "lame-3.100") $lame -Force
+  Remove-Item $tmp -Recurse -Force -ErrorAction SilentlyContinue
+} else {
+  Write-Host "libmp3lame already present, skipping."
+}

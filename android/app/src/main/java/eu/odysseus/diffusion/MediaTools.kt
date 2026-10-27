@@ -48,12 +48,9 @@ object MediaTools {
         "aac-128" to mapOf("desc" to "AAC 128 kbps (Apple/Android compatible)", "ext" to ".m4a", "supported" to true),
         "aac-192" to mapOf("desc" to "AAC 192 kbps", "ext" to ".m4a", "supported" to true),
         "wav-16k" to mapOf("desc" to "WAV 16 kHz mono (for Whisper)", "ext" to ".wav", "supported" to true),
-        "mp3-128" to mapOf("desc" to "MP3 128 kbps", "ext" to ".mp3", "supported" to false,
-                           "reason" to "Android has no MP3 encoder"),
-        "mp3-192" to mapOf("desc" to "MP3 192 kbps", "ext" to ".mp3", "supported" to false,
-                           "reason" to "Android has no MP3 encoder"),
-        "mp3-320" to mapOf("desc" to "MP3 320 kbps", "ext" to ".mp3", "supported" to false,
-                           "reason" to "Android has no MP3 encoder"),
+        "mp3-128" to mapOf("desc" to "MP3 128 kbps (LAME)", "ext" to ".mp3", "supported" to true),
+        "mp3-192" to mapOf("desc" to "MP3 192 kbps (LAME)", "ext" to ".mp3", "supported" to true),
+        "mp3-320" to mapOf("desc" to "MP3 320 kbps (LAME)", "ext" to ".mp3", "supported" to true),
         "opus" to mapOf("desc" to "Opus", "ext" to ".opus", "supported" to false,
                         "reason" to "Ogg/Opus muxing is not available in MediaMuxer on this API level"),
         "flac" to mapOf("desc" to "FLAC (lossless)", "ext" to ".flac", "supported" to false,
@@ -69,11 +66,20 @@ object MediaTools {
                         "reason" to "no AVIF encoder on Android"),
     )
 
-    fun presetsJson(): Map<String, Any> = mapOf(
-        "video" to videoPresets,
-        "audio" to audioPresets,
-        "image" to imagePresets,
-        "resize" to mapOf(
+    fun presetsJson(): Map<String, Any> {
+        // MP3 depends on the bundled LAME library; report it honestly if it is
+        // missing from this build.
+        val audio = audioPresets.mapValues { (key, value) ->
+            if (key.startsWith("mp3") && !Mp3Encoder.available) {
+                value + mapOf("supported" to false,
+                              "reason" to "libmp3_jni.so is not bundled in this build")
+            } else value
+        }
+        return mapOf(
+            "video" to videoPresets,
+            "audio" to audio,
+            "image" to imagePresets,
+            "resize" to mapOf(
             "480p" to mapOf("width" to 854, "height" to 480, "desc" to "480p (SD)"),
             "720p" to mapOf("width" to 1280, "height" to 720, "desc" to "720p (HD)"),
             "1080p" to mapOf("width" to 1920, "height" to 1080, "desc" to "1080p (Full HD)"),
@@ -81,8 +87,9 @@ object MediaTools {
             "square-768" to mapOf("width" to 768, "height" to 768, "desc" to "768x768 (AI)"),
             "square-1024" to mapOf("width" to 1024, "height" to 1024, "desc" to "1024x1024 (AI)"),
         ),
-        "engine" to "android-mediacodec",
-    )
+            "engine" to "android-mediacodec",
+        )
+    }
 
     // ------------------------------------------------------------------- info
     fun info(path: File): Map<String, Any> {
@@ -246,21 +253,26 @@ object MediaTools {
                 }
                 val bytes = outFile.readBytes()
                 outFile.delete()
+                if (preset.startsWith("mp3")) {
+                    // a copied AAC track cannot become MP3: re-encode instead
+                    return toMp3(input, preset)
+                }
                 return Output(bytes, "audio.m4a", "audio/mp4")
             }
         } finally {
             extractor.release()
         }
-        // Other codecs: decode + re-encode to AAC.
-        return transcodeAudio(input, "aac-192")
+        // Other codecs: decode + re-encode.
+        return if (preset.startsWith("mp3")) toMp3(input, preset) else transcodeAudio(input, "aac-192")
     }
 
     // ------------------------------------------------------------- audio ops
     fun convertAudio(input: File, preset: String): Output {
         val spec = audioPresets[preset] ?: throw Unsupported("unknown audio preset: $preset")
         if (spec["supported"] != true) throw Unsupported(spec["reason"] as String)
-        return when (preset) {
-            "wav-16k" -> toWav16k(input)
+        return when {
+            preset == "wav-16k" -> toWav16k(input)
+            preset.startsWith("mp3") -> toMp3(input, preset)
             else -> transcodeAudio(input, preset)
         }
     }
@@ -502,6 +514,23 @@ object MediaTools {
             try { muxer?.release() } catch (_: Exception) {}
             outFile.delete()
         }
+    }
+
+    /** Decode any audio source and encode it with LAME. */
+    private fun toMp3(input: File, preset: String): Output {
+        if (!Mp3Encoder.available) {
+            throw Unsupported("libmp3_jni.so is not bundled in this build")
+        }
+        val bitrate = when (preset) {
+            "mp3-128" -> 128
+            "mp3-192" -> 192
+            "mp3-320" -> 320
+            else -> 192
+        }
+        val pcm = decodeToPcm(input)
+        val bytes = Mp3Encoder.encode(pcm.samples, pcm.rate, pcm.channels, bitrate)
+            ?: throw Unsupported("MP3 encoding failed")
+        return Output(bytes, "audio.mp3", "audio/mpeg")
     }
 
     // ------------------------------------------------------------- video ops

@@ -42,3 +42,28 @@ if(EXISTS "${NCNN_ROOT}/lib/libncnn.so")
 else()
     message(STATUS "ncnn not found for ${ANDROID_ABI}; skipping realesrgan_jni")
 endif()
+
+# --- MP3 encoding (libmp3lame, LGPL, statically linked into our JNI) ---
+# Android has no MP3 encoder in MediaCodec. LAME is ~1 MB of C and solves that
+# without bundling ffmpeg. Sources come from tools/fetch_third_party.ps1.
+# LAME lives next to llama.cpp in android/third_party (gitignored, fetched by
+# tools/fetch_third_party.ps1): cpp -> main -> src -> app -> android.
+set(LAME_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../../../../third_party/lame")
+if(EXISTS "${LAME_DIR}/libmp3lame/lame.c")
+    file(GLOB LAME_SRC "${LAME_DIR}/libmp3lame/*.c")
+    add_library(mp3lame STATIC ${LAME_SRC})
+    target_include_directories(mp3lame PUBLIC
+            "${LAME_DIR}/include"
+            "${LAME_DIR}/libmp3lame")
+    target_include_directories(mp3lame PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/lame_config")
+    # -include: LAME includes machine.h before config.h in some TUs, and
+    # that header switches memcpy to bcopy unless STDC_HEADERS is already set.
+    target_compile_options(mp3lame PRIVATE -O3 -w
+            -include "${CMAKE_CURRENT_SOURCE_DIR}/lame_config/config.h")
+
+    add_library(odysseus_mp3_jni SHARED mp3_jni.cpp)
+    set_target_properties(odysseus_mp3_jni PROPERTIES OUTPUT_NAME "mp3_jni")
+    target_link_libraries(odysseus_mp3_jni PRIVATE mp3lame log)
+else()
+    message(STATUS "libmp3lame not found; MP3 presets stay unsupported")
+endif()
