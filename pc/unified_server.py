@@ -979,6 +979,182 @@ def chat_completions(body: dict):
 
 # ---------- audio ----------
 
+# ---------- batch queue ----------
+# Run N jobs sequentially in a background thread (one heavy engine at a time)
+# and expose their progress through /v1/batch/{id}. Each job reuses the same
+# pipeline as the single endpoint, so nothing is duplicated.
+_BATCHES: dict = {}
+_BATCHES_LOCK = threading.Lock()
+
+
+def _batch_start(bid: str, jobs: list) -> None:
+    with _BATCHES_LOCK:
+        _BATCHES[bid] = {
+            "id": bid, "state": "running", "total": len(jobs), "done": 0,
+            "percent": 0, "results": [], "error": "", "started": time.time(),
+            "cancel": False,
+        }
+
+
+def _batch_update(bid: str, done: int, message: str = "") -> None:
+    with _BATCHES_LOCK:
+        job = _BATCHES.get(bid)
+        if not job:
+            return
+        job["done"] = done
+        job["percent"] = int(100 * done / max(1, job["total"]))
+        job["message"] = message
+
+
+def _batch_finish(bid: str, state: str, error: str = "") -> None:
+    with _BATCHES_LOCK:
+        job = _BATCHES.get(bid)
+        if not job:
+            return
+        job["state"] = state
+        job["error"] = error[:300]
+        job["percent"] = 100 if state == "done" else job["percent"]
+        job["finished"] = time.time()
+
+
+def _batch_cancelled(bid: str) -> bool:
+    with _BATCHES_LOCK:
+        return bool(_BATCHES.get(bid, {}).get("cancel"))
+
+
+def _run_batch(bid: str, jobs: list, stop_on_error: bool) -> None:
+    results = []
+    try:
+        for i, job in enumerate(jobs):
+            if _batch_cancelled(bid):
+                _batch_finish(bid, "cancelled", "cancelled by user")
+                with _BATCHES_LOCK:
+                    _BATCHES[bid]["results"] = results
+                return
+            kind = (job.get("type") or job.get("kind") or "").lower()
+            try:
+                if kind == "generate":
+                    model_id = _resolve_image_model(job.get("model", ""))
+                    _manager.ensure("image", model_id)
+                    _release_vlm_best_effort()
+                    prompt = job.get("prompt", "")
+                    size = job.get("size", "512x512")
+                    quality = job.get("quality", "medium")
+                    b64 = _try_real_generation(model_id, prompt, size, quality,
+                                                job.get("negative_prompt", ""),
+                                                job.get("guidance", 1.0),
+                                                int(job.get("seed", 0) or time.time()))
+                    if not b64:
+                        b64 = _placeholder_png_b64()
+                        engine = "placeholder"
+                    else:
+                        engine = "diffusers"
+                    meta = _store_b64("image", ".png", b64, bid)
+                    results.append({"index": i, "type": "generate", "ok": True,
+                                    "size": size, "engine": engine,
+                                    "outputs": [meta] if meta else []})
+                elif kind == "upscale":
+                    image = job.get("image", "")
+                    scale = int(job.get("scale", 2))
+                    _manager.ensure("upscale", "RealESRGAN_x4v3")
+                    out = upscale_image_b64(image, scale, job.get("model") or "RealESRGAN_x4v3")
+                    meta = _store_b64("image", ".png", out["image"], bid)
+                    out["outputs"] = [meta] if meta else []
+                    results.append({"index": i, "type": "upscale", "ok": True, **out})
+                elif kind == "transcribe":
+                    wanted = job.get("model", "small") or "small"
+                    if wanted not in ALLOWED_WHISPER:
+                        wanted = "small"
+                    text, lang, segs = _transcribe_with_whisper(
+                        job.get("_path", ""), wanted, job.get("language") or "sk")
+                    meta = _store_output("text", ".txt", text.encode("utf-8"), bid)
+                    results.append({"index": i, "type": "transcribe", "ok": True,
+                                    "text": text, "language": lang,
+                                    "segments": len(segs), "outputs": [meta]})
+                elif kind == "convert-image":
+                    # image bytes passed as base64 under job["image_b64"]
+                    import base64 as _b64
+                    import io as _io
+                    import tempfile as _tf
+                    from pathlib import Path as _P
+                    raw = _b64.b64decode(job.get("image_b64", ""))
+                    suffix = _P(job.get("filename", "image.png")).suffix or ".png"
+                    with _tf.NamedTemporaryFile(delete=False, suffix=suffix) as t:
+                        t.write(raw)
+                        tmp = t.name
+                    try:
+                        out_path, info = convert_image(_P(tmp), preset=job.get("preset", "jpg-95"))
+                        out_data = _P(out_path).read_bytes()
+                        out_b64 = base64.b64encode(out_data).decode()
+                        meta = _store_output("image", _P(out_path).suffix.lower() or ".jpg",
+                                             out_data, bid)
+                        results.append({"index": i, "type": "convert-image", "ok": True,
+                                        "file": out_b64, "outputs": [meta]})
+                    finally:
+                        try:
+                            _P(tmp).unlink(missing_ok=True)
+                        except Exception:
+                            pass
+                else:
+                    raise ValueError(f"unknown job type: {kind}")
+            except Exception as e:
+                logger.warning("batch %s job %d failed: %s", bid, i, str(e)[:200])
+                results.append({"index": i, "type": kind, "ok": False,
+                                "error": str(e)[:200]})
+                if stop_on_error:
+                    _batch_finish(bid, "error", str(e))
+                    with _BATCHES_LOCK:
+                        _BATCHES[bid]["results"] = results
+                    return
+            _batch_update(bid, i + 1, f"job {i + 1}/{len(jobs)}")
+        _batch_finish(bid, "done")
+        with _BATCHES_LOCK:
+            _BATCHES[bid]["results"] = results
+    except Exception as e:
+        _batch_finish(bid, "error", str(e))
+        with _BATCHES_LOCK:
+            _BATCHES[bid]["results"] = results
+
+
+class BatchRequest(BaseModel):
+    jobs: List[dict] = []
+    stop_on_error: bool = True
+    request_id: Optional[str] = ""
+
+
+@app.post("/v1/batch")
+def batch(req: BatchRequest):
+    if not req.jobs:
+        return JSONResponse(status_code=400, content={"error": "no jobs"})
+    bid = (req.request_id or "").strip() or f"batch-{uuid.uuid4().hex[:8]}"
+    _batch_start(bid, req.jobs)
+    threading.Thread(target=_run_batch, args=(bid, req.jobs, req.stop_on_error),
+                     daemon=True).start()
+    return {"id": bid, "state": "running", "total": len(req.jobs),
+            "request_id": rid if False else bid}
+
+
+@app.get("/v1/batch/{bid}")
+def batch_status(bid: str):
+    with _BATCHES_LOCK:
+        job = _BATCHES.get(bid)
+        if not job:
+            return JSONResponse(status_code=404, content={"error": "unknown batch"})
+        snap = dict(job)
+    snap["elapsed"] = round(time.time() - snap["started"], 1)
+    return snap
+
+
+@app.post("/v1/batch/{bid}/cancel")
+def batch_cancel(bid: str):
+    with _BATCHES_LOCK:
+        job = _BATCHES.get(bid)
+        if not job:
+            return JSONResponse(status_code=404, content={"error": "unknown batch"})
+        job["cancel"] = True
+    return {"id": bid, "state": "cancelling", "cancelled": True}
+
+
 # ---------- job progress / cancellation ----------
 # Long-running work (transcription today, more kinds later) registers here so a
 # client can poll /v1/jobs/{id} and stop it with /v1/jobs/{id}/cancel.
