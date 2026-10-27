@@ -34,7 +34,11 @@ Write-Host "== current service config =="
 & sc.exe config $Service binPath= "`"$Nssm`"" | Out-Null
 
 # 2) nssm parameters: keep the legacy diffusion server but with pc/ paths.
-$svcArgs = "--lazy --models-json `"$PcDir\models.json`" --port 8101 --host 0.0.0.0 --allowed-host 100.88.219.120 --disable-safety-checker"
+# Optional: set PRISM_ALLOWED_HOST to the Tailscale/LAN address external
+# clients use (e.g. 100.x.y.z); nothing machine-specific is stored here.
+$allowedHost = $env:PRISM_ALLOWED_HOST
+$hostArg = if ($allowedHost) { " --allowed-host $allowedHost" } else { "" }
+$svcArgs = "--lazy --models-json `"$PcDir\models.json`" --port 8101 --host 0.0.0.0$hostArg --disable-safety-checker"
 & $Nssm set $Service Application $Python | Out-Null
 & $Nssm set $Service AppParameters "`"$PcDir\diffusion_server.py`" $svcArgs" | Out-Null
 & $Nssm set $Service AppDirectory $PcDir | Out-Null

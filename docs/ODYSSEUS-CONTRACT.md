@@ -1,5 +1,10 @@
 # Odysseus integration contract (server side, frozen)
 
+> **Superseded for new work.** This is the minimal subset the Odysseus
+> backend was pinned to. The authoritative, current contract is
+> `pc/docs/UNIFIED-CONTRACT.md`; Android parity is tracked in
+> `android/contract-compat.md`.
+
 Base: `http://<host>:8101`. No auth on LAN. All image routes accept `model`
 (registry id, empty = default) and `request_id` (echoed back in every response;
 poll it while waiting).

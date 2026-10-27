@@ -1,5 +1,9 @@
 # HANDOFF — status as of 2026-10-23
 
+> **Historical snapshot, kept for context only.** Current state lives in
+> `docs/CHECKLIST.md` (what is done) and `docs/CHECKPOINTS.md` (why and
+> with what evidence). Do not append to this file.
+
 Quick context for continuing after a restart. The source of truth is the code, not this file.
 
 ## Done

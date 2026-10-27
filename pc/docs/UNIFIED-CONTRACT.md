@@ -16,6 +16,7 @@ Legacy: the old `WhisperApi :4444/v1/audio/*` remains as a shim to `:8101/v1/aud
 | POST | `/v1/images/generations` | JSON `{model, prompt, n 1..4, size WxH, quality, request_id}` | `{created, data:[{b64_json}], request_id}` |
 | POST | `/v1/images/edits` | multipart `image + prompt, model, n, size, quality, strength, request_id` | same |
 | POST | `/v1/images/inpaint` | JSON `{image b64, mask b64, prompt, strength, model, request_id}` | `{image b64, elapsed, request_id}` |
+| POST | `/v1/images/outpaint` | `{image, prompt, margin?|left/right/top/bottom, strength?, steps?}` | `{image, input_size, output_size, margins, engine}` |
 | POST | `/v1/images/harmonize` | JSON `{image b64, prompt, strength, model, request_id}` | `{image b64, elapsed, request_id}` |
 | POST | `/v1/images/upscale` | JSON `{image b64, scale 2/3/4, model, request_id}` | `{image b64, elapsed, model, scale, request_id}` |
 | POST | `/v1/images/caption` | JSON `{image b64, prompt, max_tokens, request_id}` | `{text, elapsed, engine, request_id}` (V2, SmolVLM-500M) |

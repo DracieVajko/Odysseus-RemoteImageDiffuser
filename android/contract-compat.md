@@ -12,7 +12,8 @@ no emulator, manually via `curl`. Each line: command → expected shape.
 - `PHONE` = the phone's IP in the LAN.
 
 ```bash
-PHONE=192.168.1.60
+# The phone's LAN address (router DHCP lease, or `adb shell ip addr`).
+PHONE=<phone-ip>
 ```
 
 ## 1. GET /health

@@ -1,6 +1,6 @@
 """Full API test for the Odysseus diffusion helper.
 Usage (venv python):
-  python tests\\test_api.py --model DreamShaper [--remote-host 100.88.219.120]
+  python tests\\test_api.py --model DreamShaper [--remote-host <tailscale-or-lan-ip>]
 Does: /health, /v1/models, generations (saves PNG), edits, inpaint, outpaint-via-inpaint.
 Measures: VRAM (nvidia-smi), RAM, generation time. Prints JSON summary.
 """

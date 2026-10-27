@@ -36,7 +36,11 @@ Write-Host "== current service config =="
 Show-Config
 
 if ($Revert) {
-  $oldArgs = "--lazy --models-json `"$Dir\models.json`" --port 8101 --host 0.0.0.0 --allowed-host 100.88.219.120 --disable-safety-checker"
+  # The Tailscale/LAN address an external client is allowed to use comes from
+  # the environment, never from a hardcoded value in the repository.
+  $allowedHost = $env:PRISM_ALLOWED_HOST
+  $hostArg = if ($allowedHost) { " --allowed-host $allowedHost" } else { "" }
+  $oldArgs = "--lazy --models-json `"$Dir\models.json`" --port 8101 --host 0.0.0.0$hostArg --disable-safety-checker"
   if ($WhatIf) { Write-Host "WOULD revert to diffusion_server.py $oldArgs"; exit 0 }
   & $Nssm stop $Service | Out-Null
   & $Nssm set $Service Application $Python | Out-Null

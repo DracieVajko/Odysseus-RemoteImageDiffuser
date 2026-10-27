@@ -49,5 +49,56 @@ android/.agentbridge/
 android/build/
 android/app/build/
 android/app/.cxx/
+android/*/.cxx/
 android/*/build/
 *.hprof
+
+# Secrets and local config (never commit)
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+*.pfx
+credentials.*
+secrets.*
+secret.*
+credentials.json
+token.json
+
+# Caches / test / build artefacts
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+coverage.xml
+htmlcov/
+.cache/
+node_modules/
+android/.kotlin/
+android/lint-results*
+*.iml
+*.zip
+*.7z
+*.tar.gz
+*.tmp
+*.orig
+*.rej
+
+# Model weights and inference artefacts (downloaded, never committed)
+*.onnx
+*.onnx.data
+*.gguf
+*.h5
+*.msgpack
+*.npz
+
+# AI/ML caches
+.huggingface/
+.cache/huggingface/
+lmstudio/
+.ollama/
+
+# llama.cpp + mtmd sources (cloned by android/tools/fetch_third_party.ps1)
+android/third_party/
