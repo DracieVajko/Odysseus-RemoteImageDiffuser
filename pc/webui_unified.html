@@ -74,6 +74,7 @@ canvas#maskpad { width: 100%; border-radius: 6px; border: 1px solid var(--border
 <button id="tabPaint" onclick="showTab('paint')">Inpaint</button>
 <button id="tabImg" onclick="showTab('img')">Edit</button>
 <button id="tabTools" onclick="showTab('tools')">Tools</button>
+<button id="tabOutputs" onclick="showTab('outputs')">Outputs</button>
 <button id="tabModels" onclick="showTab('models')">Models</button>
 <button id="tabSettings" onclick="showTab('settings')">Settings</button>
 </div>
@@ -213,6 +214,17 @@ canvas#maskpad { width: 100%; border-radius: 6px; border: 1px solid var(--border
 <div id="toolout">result appears here…</div>
 </div>
 
+<div id="formOutputs" style="display:none">
+<label>Output folder (every job writes its result here)</label>
+<div class="modelrow">
+<input id="outputsDir" type="text" readonly style="flex:1" value="…">
+<button class="dl" onclick="openOutputsFolder()">Open folder</button>
+<button class="dl" style="background:#30363d" onclick="loadOutputs()">Refresh</button>
+</div>
+<div class="hint" id="outputsHint"></div>
+<div id="outputsList"></div>
+</div>
+
 <div id="formModels" style="display:none">
 <label>Installed / available models</label>
 <div class="row" style="margin-bottom:8px">
@@ -272,8 +284,8 @@ function copyLog(){ const t=document.getElementById('log').textContent||''; navi
 function clearLog(){ document.getElementById('log').textContent=''; }
 async function cancelModel(id){ try { await fetch('/v1/models/cancel',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({id})}); log('stop requested: '+id); setTimeout(loadCatalog, 800); } catch(e){ log('cancel error: '+e); } }
 function saveTranscript(){ const t=document.getElementById('txtout').textContent||''; const blob=new Blob([t],{type:'text/plain'}); const a=document.createElement('a'); a.href=URL.createObjectURL(blob); a.download='transcript_'+Date.now()+'.txt'; a.click(); }
-const TABS = ['txt','img','paint','up','tr','cap','tools','models','settings'];
-function showTab(t){ if(t==='models'){ loadCatalog(); loadCustom(); } if(t==='settings') loadSettings(); if(t==='tools') refreshToolPresets();
+const TABS = ['txt','img','paint','up','tr','cap','tools','outputs','models','settings'];
+function showTab(t){ if(t==='models'){ loadCatalog(); loadCustom(); } if(t==='settings') loadSettings(); if(t==='tools') refreshToolPresets(); if(t==='outputs') loadOutputs();
   // The image model selector only applies to the image tabs; showing it on
   // Transcribe/Upscale/Caption made those tabs look like they used image models.
   const imw = document.getElementById('imagemodelwrap');
@@ -729,6 +741,66 @@ async function runTool(){
       log('info fetched in '+secs+'s');
     }
   } catch(e){ log('ERROR: '+e); } finally { btn.disabled=false; btn.textContent='Run'; refresh(); }
+}
+
+// ---------- outputs ----------
+function fmtSize(n){
+  if(!n) return '0 B';
+  if(n > 1048576) return (n/1048576).toFixed(1)+' MB';
+  if(n > 1024) return Math.round(n/1024)+' KB';
+  return n+' B';
+}
+function fmtDate(ts){
+  try { return new Date(ts*1000).toLocaleString(); } catch(e){ return ''; }
+}
+async function loadOutputs(){
+  const box = document.getElementById('outputsList');
+  const hint = document.getElementById('outputsHint');
+  box.innerHTML = '<div class="hint">loading…</div>';
+  try {
+    const j = await (await fetch('/v1/outputs?limit=200')).json();
+    document.getElementById('outputsDir').value = j.dir || '';
+    hint.textContent = (j.count||0)+' file(s) · click a name to open it in a new tab';
+    box.innerHTML = '';
+    if(!(j.files||[]).length){
+      box.innerHTML = '<div class="hint">No outputs yet — run Generate, Upscale, Transcribe or an FFmpeg tool.</div>';
+      return;
+    }
+    for(const f of j.files){
+      const row = document.createElement('div');
+      row.style.cssText = 'display:flex;gap:8px;align-items:center;padding:6px 0;border-bottom:1px solid var(--border)';
+      const info = document.createElement('div');
+      info.style.cssText = 'flex:1;min-width:0';
+      info.innerHTML = '<a href="'+f.url+'" target="_blank" style="color:#58a6ff;font-size:12px;text-decoration:none" title="'+(f.path||'')+'">'
+        + f.name + '</a><div class="hint" style="margin:0">'+f.kind+' · '+fmtSize(f.size)+' · '+fmtDate(f.mtime)+'</div>';
+      const del = document.createElement('button');
+      del.className = 'dl';
+      del.style.cssText = 'background:#da3633;padding:5px 8px;font-size:11px';
+      del.textContent = 'Delete';
+      del.onclick = () => deleteOutput(f.path);
+      row.appendChild(info); row.appendChild(del);
+      box.appendChild(row);
+    }
+  } catch(e){
+    box.innerHTML = '<div class="hint">outputs error: '+e+'</div>';
+  }
+}
+async function deleteOutput(path){
+  if(!confirm('Delete '+path+'?')) return;
+  try {
+    const r = await fetch('/v1/outputs/'+path, {method:'DELETE'});
+    if(!r.ok){ log('delete failed: '+r.status); return; }
+    log('deleted '+path);
+    loadOutputs();
+  } catch(e){ log('delete error: '+e); }
+}
+async function openOutputsFolder(){
+  try {
+    const r = await fetch('/v1/outputs/open', {method:'POST'});
+    const j = await r.json();
+    if(!r.ok){ log('open folder failed: '+(j.error||r.status)); alert(j.error||('Error '+r.status)); return; }
+    log('opened '+j.opened);
+  } catch(e){ log('open folder error: '+e); }
 }
 
 // ---------- models (install/uninstall) ----------

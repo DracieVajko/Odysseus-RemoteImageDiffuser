@@ -17,6 +17,7 @@ import tempfile
 import json
 import logging
 import os
+import sys
 import time
 import uuid
 from contextlib import asynccontextmanager
@@ -24,7 +25,8 @@ from pathlib import Path
 
 from fastapi import FastAPI, File, Form, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
+from fastapi.responses import (FileResponse, HTMLResponse, JSONResponse,
+                               RedirectResponse)
 from pydantic import BaseModel
 from typing import Optional, Tuple, List
 
@@ -567,9 +569,16 @@ def generations(req: GenRequest):
         real_size = f"{_im.width}x{_im.height}"
     except Exception:
         pass
+    stored = []
+    for item in data:
+        meta = _store_b64("image", ".png", item.get("b64_json", ""), rid)
+        if meta:
+            stored.append(meta)
+            item["output"] = meta
     return {
         "created": int(time.time()),
         "data": data,
+        "outputs": stored,
         "request_id": rid,
         "size": real_size,
         "requested_size": req.size or "768x768",
@@ -651,8 +660,10 @@ async def edits(
         real_size = f"{_im.width}x{_im.height}"
     except Exception:
         pass
+    meta = _store_b64("image", ".png", b64, rid)
     return {"created": int(time.time()), "data": [{"b64_json": b64}],
-            "request_id": rid, "engine": engine, "size": real_size}
+            "request_id": rid, "engine": engine, "size": real_size,
+            "outputs": [meta] if meta else []}
 
 
 @app.post("/v1/images/inpaint")
@@ -690,8 +701,10 @@ def inpaint(req: InpaintRequest):
                                    strength=float(req.strength or 0.8),
                                    size=side, steps=steps,
                                    mode=req.mode or "add", color=req.color or "#0066ff")
+                meta = _store_b64("image", ".png", real, rid)
                 return {"image": real, "elapsed": round(time.time() - t0, 2),
-                        "request_id": rid, "engine": "onnx-inpaint"}
+                        "request_id": rid, "engine": "onnx-inpaint",
+                        "outputs": [meta] if meta else []}
         except Exception as e:
             logger.warning(f"onnx inpaint failed: {str(e)[:200]}")
         try:
@@ -703,8 +716,10 @@ def inpaint(req: InpaintRequest):
             logger.warning(f"real inpaint failed, echo fallback: {str(e)[:160]}")
             real = None
         if real:
+            meta = _store_b64("image", ".png", real, rid)
             return {"image": real, "elapsed": round(time.time() - t0, 2),
-                    "request_id": rid, "engine": "diffusion"}
+                    "request_id": rid, "engine": "diffusion",
+                    "outputs": [meta] if meta else []}
     return {"image": req.image, "elapsed": round(time.time() - t0, 2),
             "request_id": rid, "engine": "echo"}
 
@@ -809,7 +824,9 @@ def outpaint(req: OutpaintRequest):
     except Exception as e:
         logger.warning(f"outpaint failed: {str(e)[:200]}")
         return JSONResponse(status_code=500, content={"error": f"outpaint failed: {str(e)[:200]}"})
+    meta = _store_b64("image", ".png", out_b64, rid)
     return {"image": out_b64, "elapsed": round(time.time() - t0, 2),
+            "outputs": [meta] if meta else [],
             "request_id": rid, "engine": "onnx-outpaint",
             "input_size": [w, h], "output_size": [new_w, new_h],
             "margins": {"left": left, "right": right, "top": top, "bottom": bottom}}
@@ -857,6 +874,8 @@ def upscale(req: UpscaleRequest):
             return JSONResponse(status_code=503, content={"error": "will not load", "detail": msg})
         return JSONResponse(status_code=400, content={"error": msg})
     out["request_id"] = rid
+    meta = _store_b64("image", ".png", out.get("image", ""), rid)
+    out["outputs"] = [meta] if meta else []
     return out
 
 
@@ -884,6 +903,11 @@ def caption(req: CaptionRequest):
         return JSONResponse(status_code=503,
                             content={"error": "will not load", "detail": str(e)[:200]})
     out["request_id"] = rid
+    try:
+        meta = _store_output("text", ".txt", str(out.get("caption", "")).encode("utf-8"), rid)
+        out["outputs"] = [meta]
+    except Exception:
+        out["outputs"] = []
     return out
 
 
@@ -953,6 +977,45 @@ def chat_completions(body: dict):
 
 
 # ---------- audio ----------
+
+# ---------- job output store ----------
+# Every produced artifact is written to pc/output/<kind>/ so a job leaves a file
+# behind instead of only a base64 blob in the response.
+OUTPUT_DIR = HERE / "output"
+OUTPUT_KINDS = ("image", "video", "audio", "text")
+
+
+def _store_output(kind: str, ext: str, data: bytes, rid: str = "", stem: str = "") -> dict:
+    """Write one artifact under output/<kind>/ and return its descriptor."""
+    kind = kind if kind in OUTPUT_KINDS else "text"
+    ext = ext if ext.startswith(".") else f".{ext}"
+    stamp = time.strftime("%Y%m%d-%H%M%S")
+    safe_rid = "".join(c for c in (rid or "") if c.isalnum() or c in "-_")[:32].strip("-_")
+    base = stem or f"{stamp}-{safe_rid or uuid.uuid4().hex[:8]}"
+    target = OUTPUT_DIR / kind
+    target.mkdir(parents=True, exist_ok=True)
+    path = target / f"{base}{ext}"
+    n = 1
+    while path.exists():
+        path = target / f"{base}-{n}{ext}"
+        n += 1
+    path.write_bytes(data)
+    return {
+        "name": path.name,
+        "kind": kind,
+        "size": len(data),
+        "path": f"{kind}/{path.name}",
+        "url": f"/v1/outputs/{kind}/{path.name}",
+    }
+
+
+def _store_b64(kind: str, ext: str, b64: str, rid: str = "") -> dict:
+    try:
+        raw = base64.b64decode(b64)
+    except Exception:
+        return {}
+    return _store_output(kind, ext, raw, rid)
+
 
 ALLOWED_AUDIO_EXT = {".mp3", ".mp4", ".mpeg", ".mpga", ".m4a", ".wav",
                      ".webm", ".ogg", ".flac", ".opus"}
@@ -1159,7 +1222,8 @@ async def transcriptions(
         if response_format == "text":
             from fastapi.responses import PlainTextResponse
             return PlainTextResponse(text)
-        return {"text": text, "language": lang, "engine": engine}
+        meta = _store_output("text", ".txt", text.encode("utf-8"), rid)
+        return {"text": text, "language": lang, "engine": engine, "outputs": [meta]}
     finally:
         try:
             if tmp:
@@ -1264,6 +1328,11 @@ async def convert_video_endpoint(
 
         out_data = Path(out_path).read_bytes()
         out_b64 = base64.b64encode(out_data).decode()
+        _ext = Path(out_path).suffix.lower() or ".bin"
+        _kind = ("image" if _ext in (".jpg", ".jpeg", ".png", ".webp", ".avif") else
+                 "audio" if _ext in (".mp3", ".m4a", ".aac", ".wav", ".opus", ".flac") else
+                 "video")
+        out_meta = _store_output(_kind, _ext, out_data, rid)
 
         try:
             Path(out_path).unlink(missing_ok=True)
@@ -1272,6 +1341,7 @@ async def convert_video_endpoint(
 
         return {
             "file": out_b64,
+            "outputs": [out_meta],
             "filename": Path(out_path).name,
             "elapsed": 0,
             "request_id": rid,
@@ -1323,6 +1393,11 @@ async def convert_audio_endpoint(
 
         out_data = Path(out_path).read_bytes()
         out_b64 = base64.b64encode(out_data).decode()
+        _ext = Path(out_path).suffix.lower() or ".bin"
+        _kind = ("image" if _ext in (".jpg", ".jpeg", ".png", ".webp", ".avif") else
+                 "audio" if _ext in (".mp3", ".m4a", ".aac", ".wav", ".opus", ".flac") else
+                 "video")
+        out_meta = _store_output(_kind, _ext, out_data, rid)
 
         try:
             Path(out_path).unlink(missing_ok=True)
@@ -1331,6 +1406,7 @@ async def convert_audio_endpoint(
 
         return {
             "file": out_b64,
+            "outputs": [out_meta],
             "filename": Path(out_path).name,
             "request_id": rid,
             "info": {
@@ -1368,13 +1444,17 @@ async def convert_image_endpoint(
             tmp = t.name
             t.write(content)
         out_path, info = convert_image(Path(tmp), preset=preset)
-        out_b64 = base64.b64encode(Path(out_path).read_bytes()).decode()
+        _raw = Path(out_path).read_bytes()
+        out_b64 = base64.b64encode(_raw).decode()
+        _ext = Path(out_path).suffix.lower() or ".jpg"
+        out_meta = _store_output("image", _ext, _raw, rid)
         try:
             Path(out_path).unlink(missing_ok=True)
         except Exception:
             pass
         return {
             "file": out_b64,
+            "outputs": [out_meta],
             "filename": Path(out_path).name,
             "request_id": rid,
             "info": {
@@ -1416,6 +1496,11 @@ async def extract_audio_endpoint(
 
         out_data = Path(out_path).read_bytes()
         out_b64 = base64.b64encode(out_data).decode()
+        _ext = Path(out_path).suffix.lower() or ".bin"
+        _kind = ("image" if _ext in (".jpg", ".jpeg", ".png", ".webp", ".avif") else
+                 "audio" if _ext in (".mp3", ".m4a", ".aac", ".wav", ".opus", ".flac") else
+                 "video")
+        out_meta = _store_output(_kind, _ext, out_data, rid)
 
         try:
             Path(out_path).unlink(missing_ok=True)
@@ -1424,6 +1509,7 @@ async def extract_audio_endpoint(
 
         return {
             "file": out_b64,
+            "outputs": [out_meta],
             "filename": Path(out_path).name,
             "request_id": rid,
             "info": {
@@ -1464,6 +1550,11 @@ async def trim_endpoint(
 
         out_data = Path(out_path).read_bytes()
         out_b64 = base64.b64encode(out_data).decode()
+        _ext = Path(out_path).suffix.lower() or ".bin"
+        _kind = ("image" if _ext in (".jpg", ".jpeg", ".png", ".webp", ".avif") else
+                 "audio" if _ext in (".mp3", ".m4a", ".aac", ".wav", ".opus", ".flac") else
+                 "video")
+        out_meta = _store_output(_kind, _ext, out_data, rid)
 
         try:
             Path(out_path).unlink(missing_ok=True)
@@ -1472,6 +1563,7 @@ async def trim_endpoint(
 
         return {
             "file": out_b64,
+            "outputs": [out_meta],
             "filename": Path(out_path).name,
             "request_id": rid,
             "info": {
@@ -1511,6 +1603,11 @@ async def compress_endpoint(
 
         out_data = Path(out_path).read_bytes()
         out_b64 = base64.b64encode(out_data).decode()
+        _ext = Path(out_path).suffix.lower() or ".bin"
+        _kind = ("image" if _ext in (".jpg", ".jpeg", ".png", ".webp", ".avif") else
+                 "audio" if _ext in (".mp3", ".m4a", ".aac", ".wav", ".opus", ".flac") else
+                 "video")
+        out_meta = _store_output(_kind, _ext, out_data, rid)
 
         try:
             Path(out_path).unlink(missing_ok=True)
@@ -1519,6 +1616,7 @@ async def compress_endpoint(
 
         return {
             "file": out_b64,
+            "outputs": [out_meta],
             "filename": Path(out_path).name,
             "request_id": rid,
             "info": {
@@ -1563,6 +1661,81 @@ async def media_info_endpoint(
             pass
 
 
+
+
+# ---------- outputs ----------
+
+def _output_path(rel: str) -> Path:
+    """Resolve a client-supplied output path, refusing anything outside output/."""
+    root = OUTPUT_DIR.resolve()
+    target = (root / rel).resolve()
+    if root not in target.parents and target != root:
+        raise ValueError("path outside output/")
+    return target
+
+
+@app.get("/v1/outputs")
+def list_outputs(limit: int = 200):
+    files = []
+    if OUTPUT_DIR.is_dir():
+        for p in sorted(OUTPUT_DIR.rglob("*"), key=lambda x: x.stat().st_mtime,
+                        reverse=True):
+            if not p.is_file():
+                continue
+            rel = p.relative_to(OUTPUT_DIR).as_posix()
+            st = p.stat()
+            files.append({
+                "name": p.name,
+                "kind": p.parent.name,
+                "size": st.st_size,
+                "mtime": int(st.st_mtime),
+                "path": rel,
+                "url": f"/v1/outputs/{rel}",
+            })
+            if len(files) >= max(1, min(limit, 1000)):
+                break
+    return {"dir": str(OUTPUT_DIR), "count": len(files), "files": files}
+
+
+@app.get("/v1/outputs/{rel:path}")
+def get_output(rel: str):
+    try:
+        target = _output_path(rel)
+    except ValueError as e:
+        return JSONResponse(status_code=400, content={"error": str(e)})
+    if not target.is_file():
+        return JSONResponse(status_code=404, content={"error": "not found"})
+    return FileResponse(target, filename=target.name)
+
+
+@app.delete("/v1/outputs/{rel:path}")
+def delete_output(rel: str):
+    try:
+        target = _output_path(rel)
+    except ValueError as e:
+        return JSONResponse(status_code=400, content={"error": str(e)})
+    if not target.is_file():
+        return JSONResponse(status_code=404, content={"error": "not found"})
+    target.unlink()
+    return {"removed": rel}
+
+
+@app.post("/v1/outputs/open")
+def open_outputs():
+    """Reveal the folder in the OS file manager (local desktop use only)."""
+    OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+    try:
+        if os.name == "nt":
+            os.startfile(str(OUTPUT_DIR))  # type: ignore[attr-defined]
+        elif sys.platform == "darwin":
+            import subprocess
+            subprocess.Popen(["open", str(OUTPUT_DIR)])
+        else:
+            import subprocess
+            subprocess.Popen(["xdg-open", str(OUTPUT_DIR)])
+        return {"opened": str(OUTPUT_DIR)}
+    except Exception as e:
+        return JSONResponse(status_code=500, content={"error": f"cannot open: {e}"})
 
 
 # ---------- model install/uninstall (PC) ----------
