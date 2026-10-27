@@ -637,9 +637,14 @@ with Android's own media stack (`MediaExtractor`/`MediaMuxer`/`MediaCodec`) in
       when the source codec matches), `convert-audio` to AAC (decode + AAC
       encoder, including WAV/PCM sources) and to WAV 16 kHz mono (linear
       resampler + hand-written RIFF header).
-- [x] Honest 503 with the reason for what the platform cannot do: MP3 (no
-      encoder in Android), FLAC/Opus (no container muxer), AVIF, VP9/WebM and
-      any video re-encode/compression (needs an EGL/MediaCodec pipeline).
+- [x] **MP3 works via libmp3lame** (LGPL, shipped as `libmp3_jni.so`, 568 KB
+      with the encoder linked in). No download, no ffmpeg binary. Verified on
+      device and re-checked with the PC's ffprobe: 11.12 s, MP3, 160 kbps
+      (LAME clamps 192 to the MPEG-2 ceiling for 16 kHz mono), decodes cleanly.
+      `convert-audio` and `extract-audio` both accept the mp3 presets.
+- [x] Honest 503 with the reason for what the platform cannot do: FLAC/Opus
+      (no container muxer), AVIF, VP9/WebM and any video re-encode/compression
+      (needs an EGL/MediaCodec pipeline).
 - [x] Headless start for automation: `adb shell am start -n
       eu.odysseus.diffusion/.MainActivity --ez start_server true` (handled in
       `onCreate` and `onNewIntent`, because `am start` on a live activity does

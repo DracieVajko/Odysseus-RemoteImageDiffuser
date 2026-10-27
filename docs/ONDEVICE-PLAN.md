@@ -144,7 +144,7 @@ downloads, settings.
 
 `/v1/ffmpeg/*` is implemented on device with MediaCodec/MediaMuxer (info,
 images, trim, audio extraction, container remux, AAC and WAV encoding). What the
-platform cannot do (MP3/FLAC/Opus/AVIF encoding, VP9/WebM, video re-encode and
+platform cannot do (FLAC/Opus/AVIF encoding, VP9/WebM, video re-encode and
 compression) answers 503 with the reason. There is no remaining PC-only
 endpoint; the difference is depth: the PC can transcode and compress video, the
 phone copies and remuxes.

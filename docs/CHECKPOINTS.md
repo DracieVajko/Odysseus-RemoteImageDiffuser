@@ -763,3 +763,14 @@ a button on a locked screen.
 
 **Evidence:** 27/27 live checks on the phone, nine of them ffmpeg, including the
 honest 503s for mp3 and compress.
+
+**MP3 via LAME (2026-10-27).** MediaCodec has no MP3 encoder, but bundling
+ffmpeg for one codec is disproportionate: `libmp3lame` 3.100 is ~1 MB of C and
+compiles with the NDK in seconds. It is linked statically into `libmp3_jni.so`
+(568 KB in the APK, LGPL-2.1, dynamically loaded) so the app's MIT licence is
+untouched. Two build details mattered: LAME includes `machine.h` before
+`config.h` in some units (which silently switches `memcpy` to `bcopy`), so the
+minimal `config.h` is force-included with `-include`, and `util.h` references
+`ieee754_float32_t`, which autoconf normally provides. Output is validated
+externally: the phone produces a 222 480-byte file that the PC's ffprobe reads
+as MP3, 11.12 s, 160 kbps, and ffmpeg decodes without warnings.
