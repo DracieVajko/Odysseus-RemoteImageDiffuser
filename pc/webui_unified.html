@@ -75,6 +75,7 @@ canvas#maskpad { width: 100%; border-radius: 6px; border: 1px solid var(--border
 <button id="tabImg" onclick="showTab('img')">Edit</button>
 <button id="tabTools" onclick="showTab('tools')">Tools</button>
 <button id="tabOutputs" onclick="showTab('outputs')">Outputs</button>
+<button id="tabBatch" onclick="showTab('batch')">Batch</button>
 <button id="tabModels" onclick="showTab('models')">Models</button>
 <button id="tabSettings" onclick="showTab('settings')">Settings</button>
 </div>
@@ -216,6 +217,19 @@ canvas#maskpad { width: 100%; border-radius: 6px; border: 1px solid var(--border
 <div id="toolout">result appears here…</div>
 </div>
 
+<div id="formBatch" style="display:none">
+<label>Prompts (one per line)</label>
+<textarea id="batchPrompts" rows="8" placeholder="a cozy cabin at sunset&#10;a robot in a field of flowers&#10;..."></textarea>
+<div class="row">
+<div><label>Size</label><select id="batchSize"><option>256x256</option><option selected>512x512</option><option>768x768</option></select></div>
+<div><label>Quality</label><select id="batchQuality"><option value="low">low (fast)</option><option value="medium" selected>medium</option><option value="high">high</option></select></div>
+<div><label>Steps</label><input type="number" id="batchSteps" value="6" min="1" max="8"></div>
+</div>
+<button class="go" id="btnBatch" onclick="runBatch()">Run batch</button>
+<div class="hint" id="batchStatus"></div>
+<div id="batchList"></div>
+</div>
+
 <div id="formOutputs" style="display:none">
 <label>Output folder (every job writes its result here)</label>
 <div class="modelrow">
@@ -286,8 +300,8 @@ function copyLog(){ const t=document.getElementById('log').textContent||''; navi
 function clearLog(){ document.getElementById('log').textContent=''; }
 async function cancelModel(id){ try { await fetch('/v1/models/cancel',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({id})}); log('stop requested: '+id); setTimeout(loadCatalog, 800); } catch(e){ log('cancel error: '+e); } }
 function saveTranscript(){ const t=document.getElementById('txtout').textContent||''; const blob=new Blob([t],{type:'text/plain'}); const a=document.createElement('a'); a.href=URL.createObjectURL(blob); a.download='transcript_'+Date.now()+'.txt'; a.click(); }
-const TABS = ['txt','img','paint','up','tr','cap','tools','outputs','models','settings'];
-function showTab(t){ if(t==='models'){ loadCatalog(); loadCustom(); } if(t==='settings') loadSettings(); if(t==='tools') refreshToolPresets(); if(t==='outputs') loadOutputs();
+const TABS = ['txt','img','paint','up','tr','cap','tools','outputs','batch','models','settings'];
+function showTab(t){ if(t==='models'){ loadCatalog(); loadCustom(); } if(t==='settings') loadSettings(); if(t==='tools') refreshToolPresets(); if(t==='outputs') loadOutputs(); if(t==='batch') loadBatch();
   // The image model selector only applies to the image tabs; showing it on
   // Transcribe/Upscale/Caption made those tabs look like they used image models.
   const imw = document.getElementById('imagemodelwrap');
@@ -854,6 +868,55 @@ async function openOutputsFolder(){
     log('opened '+j.opened);
   } catch(e){ log('open folder error: '+e); }
 }
+
+// ---------- batch ----------
+let BATCH_TIMER = null;
+async function runBatch(){
+  const prompts = document.getElementById('batchPrompts').value.split('\n')
+    .map(x => x.trim()).filter(x => x);
+  if(!prompts.length){ alert('Enter at least one prompt'); return; }
+  const jobs = prompts.map(p => ({type:'generate', prompt:p,
+    size: document.getElementById('batchSize').value,
+    quality: document.getElementById('batchQuality').value,
+    steps: +document.getElementById('batchSteps').value || 6}));
+  const btn = document.getElementById('btnBatch');
+  btn.disabled = true; btn.textContent = 'Starting…';
+  try {
+    const r = await fetch('/v1/batch',{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({jobs, stop_on_error:false})});
+    const j = await r.json();
+    if(!r.ok){ log('batch error '+r.status+': '+JSON.stringify(j)); alert('Error '+r.status); return; }
+    document.getElementById('batchStatus').textContent = 'batch ' + j.id + ': 0/' + j.total;
+    pollBatch(j.id);
+  } catch(e){ log('batch error: '+e); }
+  finally { btn.disabled=false; btn.textContent='Run batch'; }
+}
+function pollBatch(id){
+  clearInterval(BATCH_TIMER);
+  BATCH_TIMER = setInterval(async () => {
+    try {
+      const j = await (await fetch('/v1/batch/'+id)).json();
+      document.getElementById('batchStatus').textContent =
+        'batch ' + id + ': ' + j.done + '/' + j.total + ' · ' + (j.state||'') +
+        (j.error ? ' · ' + j.error : '');
+      const box = document.getElementById('batchList');
+      box.innerHTML = '';
+      for(const r of (j.results||[])){
+        const card = document.createElement('div');
+        card.style.cssText = 'padding:6px 0;border-bottom:1px solid var(--border);font-size:12px';
+        if(r.ok){
+          card.innerHTML = '<b>'+r.index+1+'. OK</b> '+ (r.engine||'') +
+            (r.outputs&&r.outputs[0] ? ' <a href="'+r.outputs[0].url+'" target="_blank" style="color:#58a6ff">open</a>' : '');
+        } else {
+          card.innerHTML = '<b style="color:#ff7b72">'+r.index+1+'. FAIL</b> '+ (r.error||'');
+        }
+        box.appendChild(card);
+      }
+      if(j.state !== 'running'){ clearInterval(BATCH_TIMER); refresh(); }
+    } catch(e){ log('batch poll error: '+e); }
+  }, 2000);
+}
+function loadBatch(){ /* nothing to load */ }
 
 // ---------- models (install/uninstall) ----------
 let CATALOG = [];
