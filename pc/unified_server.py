@@ -1149,7 +1149,12 @@ async def transcriptions(
     language: str = Form(default=None),
     response_format: str = Form(default="json"),
     auto_split: str = Form(default="true"),
+    request_id: str = Form(default=""),
 ):
+    # Called directly (translations) FastAPI defaults are still Form objects.
+    if not isinstance(request_id, str):
+        request_id = ""
+    rid = request_id or f"req-{uuid.uuid4().hex[:8]}"
     up = file or audio
     url = (url or "").strip()
     if url:
@@ -1240,7 +1245,8 @@ async def translations(
 ):
     r = await transcriptions(file=file, audio=audio, url="", model=model,
                              model_name=model, device="", language=None,
-                             response_format="json", auto_split="true")
+                             response_format="json", auto_split="true",
+                             request_id="")
     if isinstance(r, dict) and "text" in r:
         return {"text": r["text"]}
     return r
