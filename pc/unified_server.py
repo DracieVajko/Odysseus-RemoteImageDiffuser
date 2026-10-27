@@ -1095,21 +1095,61 @@ def _transcribe_with_whisper(tmp_path: str, wanted: str, language):
                 f"whisper '{wanted}' is not fully downloaded "
                 f"({local_bin.stat().st_size} B); will use the HF download")
     source = str(local) if use_local else wanted
+
+    def _run(model) -> tuple[str, str, list]:
+        segs, info = model.transcribe(tmp_path, language=language, beam_size=1,
+                                      vad_filter=True)
+        items = []
+        for s in segs:
+            txt = (s.text or "").strip()
+            if not txt:
+                continue
+            items.append({"start": round(float(s.start), 2),
+                          "end": round(float(s.end), 2),
+                          "text": txt})
+        text = " ".join(i["text"] for i in items).strip()
+        return text, getattr(info, "language", language), items
+
     try:
-        m = _get_whisper_model(source, device, compute)
-        segs, info = m.transcribe(tmp_path, language=language, beam_size=1,
-                                  vad_filter=True)
-        text = " ".join(s.text for s in segs).strip()
-        return text, getattr(info, "language", language)
+        return _run(_get_whisper_model(source, device, compute))
     except Exception as e:
         if device == "cuda":
             logger.warning(f"whisper CUDA failed ({str(e)[:140]}); retrying on CPU int8")
-            m = _get_whisper_model(source, "cpu", "int8")
-            segs, info = m.transcribe(tmp_path, language=language, beam_size=1,
-                                      vad_filter=True)
-            text = " ".join(s.text for s in segs).strip()
-            return text, getattr(info, "language", language)
+            return _run(_get_whisper_model(source, "cpu", "int8"))
         raise
+
+
+def _segments_to_srt(segments: list) -> str:
+    def ts(t: float) -> str:
+        ms = int(round(t * 1000))
+        h, rem = divmod(ms, 3_600_000)
+        m, rem = divmod(rem, 60_000)
+        sec, ms = divmod(rem, 1000)
+        return f"{h:02d}:{m:02d}:{sec:02d},{ms:03d}"
+
+    lines = []
+    for i, seg in enumerate(segments, 1):
+        lines.append(str(i))
+        lines.append(f"{ts(seg['start'])} --> {ts(seg['end'])}")
+        lines.append(seg["text"])
+        lines.append("")
+    return "\n".join(lines)
+
+
+def _segments_to_vtt(segments: list) -> str:
+    def ts(t: float) -> str:
+        ms = int(round(t * 1000))
+        h, rem = divmod(ms, 3_600_000)
+        m, rem = divmod(rem, 60_000)
+        sec, ms = divmod(rem, 1000)
+        return f"{h:02d}:{m:02d}:{sec:02d}.{ms:03d}"
+
+    lines = ["WEBVTT", ""]
+    for seg in segments:
+        lines.append(f"{ts(seg['start'])} --> {ts(seg['end'])}")
+        lines.append(seg["text"])
+        lines.append("")
+    return "\n".join(lines)
 
 
 async def _transcribe_with_splitting(audio_path: Path, wanted: str, language):
@@ -1118,9 +1158,8 @@ async def _transcribe_with_splitting(audio_path: Path, wanted: str, language):
     faster-whisper handles long files with its own VAD, so splitting is only
     used for the remote WhisperApi fallback (and for legacy engines).
     """
-    def _transcribe_single(path: Path, lang: Optional[str]) -> Tuple[str, str]:
-        text, lang = _transcribe_with_whisper(str(path), wanted, lang)
-        return text, lang
+    def _transcribe_single(path: Path, lang: Optional[str]) -> Tuple[str, str, list]:
+        return _transcribe_with_whisper(str(path), wanted, lang)
 
     try:
         import faster_whisper  # noqa: F401
@@ -1129,10 +1168,10 @@ async def _transcribe_with_splitting(audio_path: Path, wanted: str, language):
         pass
 
     try:
-        # Use the audio splitter utility (remote service path)
+        # Use the audio splitter utility (remote service path): text only.
         from unified.audio_splitter import transcribe_with_splitting
         text, lang = await transcribe_with_splitting(audio_path, _transcribe_single, language)
-        return text, lang
+        return text, lang, []
     except Exception as e:
         logger.warning(f"Audio splitting failed, falling back to single transcribe: {e}")
         return _transcribe_single(audio_path, language)
@@ -1198,6 +1237,7 @@ async def transcriptions(
     logger.info(f"transcribe: {len(content)} bytes, model={wanted}, lang={language}")
     import tempfile
     tmp = None
+    segments = []
     try:
         with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as t:
             tmp = t.name
@@ -1206,9 +1246,9 @@ async def transcriptions(
             split_enabled = auto_split.lower() in ("true", "1", "yes", "on")
             logger.info(f"transcribe: starting engine (split={split_enabled})")
             if split_enabled:
-                text, lang = await _transcribe_with_splitting(Path(tmp), wanted, language)
+                text, lang, segments = await _transcribe_with_splitting(Path(tmp), wanted, language)
             else:
-                text, lang = _transcribe_with_whisper(tmp, wanted, language)
+                text, lang, segments = _transcribe_with_whisper(tmp, wanted, language)
             engine = "local"
         except Exception as e:
             logger.warning("local whisper missing (%s), proxy %s",
@@ -1218,17 +1258,38 @@ async def transcriptions(
                 wanted, language)
             if proxied is not None:
                 text, lang = proxied
+                segments = []
                 engine = "whisper-service"
                 # nothing is kept in RAM locally → release the gate immediately for images
                 _manager.unload("audio-proxied")
             else:
                 text, lang = "[unified stub — start the WhisperApi service or install faster-whisper]", language
+                segments = []
                 engine = "stub"
-        if response_format == "text":
+        fmt = (response_format or "json").strip().lower()
+        if fmt in ("srt", "vtt"):
+            body = _segments_to_srt(segments) if fmt == "srt" else _segments_to_vtt(segments)
+            if not segments:
+                # no timings (stub/proxy) -> one cue covering the whole text
+                dur = get_audio_duration(Path(tmp)) or 0.0
+                cue = [{"start": 0.0, "end": max(dur, 1.0), "text": text}]
+                body = _segments_to_srt(cue) if fmt == "srt" else _segments_to_vtt(cue)
+            meta = _store_output("text", f".{fmt}", body.encode("utf-8"), rid)
+            from fastapi.responses import PlainTextResponse
+            resp = PlainTextResponse(body)
+            resp.headers["X-Output-Path"] = meta["path"]
+            return resp
+        if fmt == "verbose_json":
+            meta = _store_output("text", ".txt", text.encode("utf-8"), rid)
+            return {"text": text, "language": lang, "engine": engine,
+                    "duration": get_audio_duration(Path(tmp)),
+                    "segments": segments, "outputs": [meta]}
+        if fmt == "text":
             from fastapi.responses import PlainTextResponse
             return PlainTextResponse(text)
         meta = _store_output("text", ".txt", text.encode("utf-8"), rid)
-        return {"text": text, "language": lang, "engine": engine, "outputs": [meta]}
+        return {"text": text, "language": lang, "engine": engine,
+                "segments": segments, "outputs": [meta]}
     finally:
         try:
             if tmp:

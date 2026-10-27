@@ -175,6 +175,7 @@ canvas#maskpad { width: 100%; border-radius: 6px; border: 1px solid var(--border
 <div class="row">
 <div><label>Whisper model</label><div class="modelrow"><select id="trmodel" onchange="try{localStorage.setItem('u_trmodel',this.value)}catch(e){}; syncDownloads()"><option value="small">small</option></select><button class="dl" id="dlAudio" onclick="downloadSelected('audio')" style="display:none">Download</button></div><div class="hint" id="dlAudioHint"></div></div>
 <div><label>Language (empty = auto)</label><select id="trlang"><option value="">auto</option><option value="sk">sk</option><option value="cs">cs</option><option value="en">en</option></select></div>
+<div><label>Format</label><select id="trformat"><option value="json" selected>text (json)</option><option value="srt">subtitles (.srt)</option><option value="vtt">subtitles (.vtt)</option><option value="verbose_json">json + segments</option></select></div>
 </div>
 <div class="row">
 <div><label><input type="checkbox" id="trsplit"> Split into 30s chunks (remote WhisperApi only)</label></div>
@@ -679,14 +680,24 @@ async function generateTr(){
   if (lang) fd.append('language', lang);
   const split = document.getElementById('trsplit').checked;
   fd.append('auto_split', split ? 'true' : 'false');
+  const fmt = document.getElementById('trformat').value;
+  fd.append('response_format', fmt);
   btn.disabled = true; btn.textContent = 'Transcribing…';
   log('POST /v1/audio/transcriptions model='+model+' file='+f.name+' ('+(f.size/1024/1024).toFixed(1)+' MB) split='+split);
   const t0 = Date.now();
   try {
     const r = await fetch('/v1/audio/transcriptions',{method:'POST',body:fd});
+    const secs = ((Date.now()-t0)/1000).toFixed(1);
+    if(fmt === 'srt' || fmt === 'vtt'){
+      const body = await r.text();
+      if(!r.ok){ log('ERROR '+r.status+': '+body.slice(0,300)); alert('Error '+r.status); return; }
+      document.getElementById('txtout').textContent = '['+fmt+' · '+secs+'s]\n'+body;
+      document.getElementById('trsave').style.display='inline';
+      log('subtitles in '+secs+'s ('+body.split('\n').length+' lines)');
+      return;
+    }
     const j = await r.json();
     if(!r.ok){ log('ERROR '+r.status+': '+JSON.stringify(j).slice(0,500)); alert('Error '+r.status); return; }
-    const secs = ((Date.now()-t0)/1000).toFixed(1);
     document.getElementById('txtout').textContent = '['+(j.language||'?')+' · '+(j.engine||'?')+' · '+secs+'s]\n'+(j.text||'(empty)');
     document.getElementById('trsave').style.display='inline';
     log('transcribed in '+secs+'s engine='+(j.engine||'?'));
