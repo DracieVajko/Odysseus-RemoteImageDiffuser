@@ -289,11 +289,14 @@ def main():
         assert rate == 16000 and ch == 1, f"{rate} Hz {ch} ch"
         return f"{rate} Hz mono {len(raw)} B"
 
-    def ff_mp3_503():
+    def ff_mp3():
         files = {"file": ("t.wav", (TD / "audio" / "jfk.wav").read_bytes(), "audio/wav")}
         r = c.post("/v1/ffmpeg/convert-audio", files=files, data={"preset": "mp3-192"})
-        assert r.status_code == 503, r.status_code
-        return r.json().get("detail", "")[:45]
+        assert r.status_code == 200, r.text[:160]
+        raw = base64.b64decode(r.json()["file"])
+        assert raw[:3] == b"ID3" or (raw[0] == 0xFF and (raw[1] & 0xE0) == 0xE0), raw[:8]
+        assert len(raw) > 100_000, len(raw)
+        return f"{len(raw)} B MP3 (LAME)"
 
     def ff_compress_503():
         files = {"file": ("t.mp4", (TD / "video" / "test_5s.mp4").read_bytes(), "video/mp4")}
@@ -339,7 +342,7 @@ def main():
     check("ffmpeg trim 1s..3s", ff_trim)
     check("ffmpeg audio -> aac", ff_audio_aac)
     check("ffmpeg audio -> wav 16k", ff_audio_wav16k)
-    check("ffmpeg mp3 -> 503", ff_mp3_503)
+    check("ffmpeg audio -> mp3", ff_mp3)
     check("ffmpeg compress -> 503", ff_compress_503)
     check("error: missing image -> 400", err_missing_image)
     check("verify unknown -> 404", unknown_model)
