@@ -337,10 +337,17 @@ class MainActivity : AppCompatActivity() {
         } else {
             val i = Intent(this, DiffusionService::class.java).apply {
             }
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) startForegroundService(i)
-            else startService(i)
-            serverRunning = true
-            log("server starting…")
+            try {
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) startForegroundService(i)
+                else startService(i)
+                serverRunning = true
+                log("server starting…")
+            } catch (e: Throwable) {
+                // Background start restrictions: report it instead of crashing.
+                serverRunning = false
+                log("server start blocked: ${e.message}. Open the app and tap START.")
+                toast("Open the app and tap START")
+            }
             renderServerState()
         }
     }
@@ -1347,7 +1354,16 @@ class DiffusionService : Service() {
         super.onCreate()
         val ch = NotificationChannel("srv", "Diffusion server", NotificationManager.IMPORTANCE_LOW)
         (getSystemService(NOTIFICATION_SERVICE) as NotificationManager).createNotificationChannel(ch)
-        startForeground(1, buildNotification("Server running on :8101"))
+        try {
+            startForeground(1, buildNotification("Server running on :8101"))
+        } catch (e: Throwable) {
+            // Android 12+ forbids promoting a service to foreground when the app
+            // was started from the background (adb, widgets, automation):
+            //   ForegroundServiceStartNotAllowedException
+            // The server is still useful without the notification, so keep
+            // running instead of taking the process down with it.
+            android.util.Log.w("DiffusionService", "startForeground not allowed: ${e.message}")
+        }
     }
 
     private fun buildNotification(text: String): Notification =
