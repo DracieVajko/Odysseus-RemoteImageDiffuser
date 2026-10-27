@@ -1,3 +1,5 @@
+import java.util.Properties
+
 plugins {
     id("com.android.library")
 }
@@ -23,10 +25,27 @@ android {
         }
     }
 
-    externalNativeBuild {
-        cmake {
-            path = file("src/main/cpp/CMakeLists.txt")
-            version = "3.22.1"
+    // CI (and any machine without the NDK) still builds the module, just
+    // without the native library; the engine then reports "not bundled".
+    if (findNdkDir() != null) {
+        externalNativeBuild {
+            cmake {
+                path = file("src/main/cpp/CMakeLists.txt")
+                version = "3.22.1"
+            }
         }
     }
+}
+
+fun findNdkDir(): java.io.File? {
+    val explicit = System.getenv("ANDROID_NDK_HOME")?.let(::file)
+    if (explicit != null && explicit.isDirectory) return explicit
+    val props = Properties()
+    rootProject.file("local.properties").takeIf { it.exists() }?.inputStream()?.use { props.load(it) }
+    val sdkRoot = (props.getProperty("sdk.dir") as String?)?.let(::file)
+        ?: System.getenv("ANDROID_HOME")?.let(::file)
+        ?: System.getenv("ANDROID_SDK_ROOT")?.let(::file)
+    val ndkRoot = sdkRoot?.resolve("ndk") ?: return null
+    return ndkRoot.listFiles()?.firstOrNull { it.isDirectory }
+        ?.takeIf { it.resolve("build/cmake/android.toolchain.cmake").exists() }
 }
