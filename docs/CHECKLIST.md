@@ -677,3 +677,36 @@ with Android's own media stack (`MediaExtractor`/`MediaMuxer`/`MediaCodec`) in
       transcribe 26 s, all nine ffmpeg checks including MP3).
 - [x] PC suite **39/39** after the one-GPU-engine fix (inpaint 52 s on
       `onnx-inpaint` instead of 321 s, outpaint 23 s, no CUDA 719 crash).
+
+## Default output folders (2026-10-27)
+
+Every job now leaves a file behind, on both products, instead of only a base64
+blob in the HTTP response.
+
+PC (`pc/output/`):
+- [x] `_store_output()` writes each artifact to `output/<kind>/<timestamp>-<id>.<ext>`
+      (kinds: image, video, audio, text) and every response carries an `outputs`
+      list with `name`, `kind`, `size`, `path` and a download `url`.
+- [x] Wired into generations (all n images), edits, inpaint (both engines),
+      outpaint, upscale, caption, transcription and all seven ffmpeg operations.
+- [x] `GET /v1/outputs` (newest first, `limit`), `GET /v1/outputs/{path}`
+      (download), `DELETE /v1/outputs/{path}`, `POST /v1/outputs/open`
+      (reveals the folder in Explorer/Finder/xdg-open). Path traversal outside
+      `output/` is refused (400/404).
+- [x] WebUI: new **Outputs** tab with the folder path, "Open folder" (opens the
+      OS file manager), "Refresh" and a list (kind, size, date) where the name
+      opens the file in a new tab and a Delete button removes it.
+      Verified: 384x384 PNG written (262 KB), listed, downloaded, deleted.
+
+Android (`Android/data/<pkg>/files/output/<kind>/`):
+- [x] `OutputStore` (store/list/delete/saveAllToDownloads) used by the API for
+      generations, edits, inpaint, outpaint, upscale, caption, chat,
+      transcription and every ffmpeg operation.
+- [x] `GET /v1/outputs`, `GET /v1/outputs/{path}`, `DELETE /v1/outputs/{path}`
+      with the same shape as the PC (verified: 118 842 B PNG listed,
+      downloaded as a valid 256x256 PNG, deleted; an MP3 from ffmpeg lands in
+      the same store).
+- [x] UI: an **Outputs** button in the Settings card opens a dialog listing the
+      files (kind/name/size); tapping opens the file through a FileProvider
+      (`<pkg>.files`), "Save all to Downloads" copies everything into the public
+      `Download/Prism` folder, and "Open folder path" shows the exact path.

@@ -785,3 +785,29 @@ launched from the background (`mAllowStartForeground false`). The uncaught
 try/catch and the server continues without the notification; `toggleServer()`
 reports the restriction instead of crashing. With this fixed the Android suite
 is 27/27 and the same run that used to die on caption now finishes in seconds.
+
+## Output folders (2026-10-27)
+
+**Why.** Both products answered with base64 only: the WebUI showed a blob in the
+browser and the phone kept results in memory until the user pressed Save. Nothing
+was auditable afterwards and a job could not be re-opened from a file.
+
+**Where.** The PC writes under `pc/output/<kind>/`, the phone under
+`Android/data/<pkg>/files/output/<kind>/` (app-private, so the server can list
+and serve it without storage permissions). The phone additionally offers
+"Save all to Downloads", which copies into `Download/Prism` via MediaStore, so
+the files are visible in any file manager.
+
+**How it is exposed.** Same shape on both: `GET /v1/outputs` (newest first),
+`GET /v1/outputs/{path}` (download), `DELETE /v1/outputs/{path}`, and every job
+response carries `outputs: [{name, kind, size, path, url}]`. The PC adds
+`POST /v1/outputs/open`, which reveals the folder in the desktop file manager —
+that is the "clickable" part a browser cannot do on its own.
+
+**Safety.** The PC resolves every requested path against `output/` and refuses
+anything outside it (`../models.json` returns 404 in the test). The phone does
+the same with `canonicalFile` + a path-prefix check.
+
+**Evidence.** PC: 384x384 PNG (262 794 B) written, listed, downloaded and
+deleted; traversal refused. Android: 118 842 B PNG listed and downloaded as a
+valid 256x256 PNG, an ffmpeg MP3 stored in the same tree, delete honoured.
