@@ -14,6 +14,7 @@ import asyncio
 import base64
 import io
 import tempfile
+import threading
 import json
 import logging
 import os
@@ -978,6 +979,77 @@ def chat_completions(body: dict):
 
 # ---------- audio ----------
 
+# ---------- job progress / cancellation ----------
+# Long-running work (transcription today, more kinds later) registers here so a
+# client can poll /v1/jobs/{id} and stop it with /v1/jobs/{id}/cancel.
+_JOBS: dict = {}
+_JOBS_LOCK = threading.Lock()
+_JOB_HISTORY = 50
+
+
+class JobCancelled(Exception):
+    pass
+
+
+def _job_start(rid: str, kind: str, total: float = 0.0, message: str = "") -> None:
+    with _JOBS_LOCK:
+        _JOBS[rid] = {
+            "id": rid, "kind": kind, "state": "running", "percent": 0,
+            "done": 0.0, "total": float(total or 0), "message": message,
+            "started": time.time(), "cancel": False, "error": "",
+        }
+        if len(_JOBS) > _JOB_HISTORY:
+            for old in sorted(_JOBS, key=lambda k: _JOBS[k]["started"])[:10]:
+                if old != rid and _JOBS[old]["state"] != "running":
+                    _JOBS.pop(old, None)
+
+
+def _job_update(rid: str, done: float = None, total: float = None,
+                message: str = None) -> None:
+    with _JOBS_LOCK:
+        job = _JOBS.get(rid)
+        if not job:
+            return
+        if done is not None:
+            job["done"] = float(done)
+        if total is not None:
+            job["total"] = float(total)
+        if message is not None:
+            job["message"] = message
+        total = job["total"]
+        if total > 0:
+            job["percent"] = int(max(0, min(100, 100.0 * job["done"] / total)))
+
+
+def _job_finish(rid: str, state: str = "done", error: str = "") -> None:
+    with _JOBS_LOCK:
+        job = _JOBS.get(rid)
+        if not job:
+            return
+        job["state"] = state
+        job["error"] = error[:300]
+        job["percent"] = 100 if state == "done" else job.get("percent", 0)
+        job["finished"] = time.time()
+
+
+def _job_cancelled(rid: str) -> bool:
+    with _JOBS_LOCK:
+        job = _JOBS.get(rid)
+        return bool(job and job.get("cancel"))
+
+
+def _job_snapshot(rid: str) -> dict:
+    with _JOBS_LOCK:
+        job = _JOBS.get(rid)
+        if not job:
+            return {"id": rid, "state": "unknown", "percent": 0}
+        snap = dict(job)
+    if snap.get("started"):
+        end = snap.get("finished") or time.time()
+        snap["elapsed"] = round(end - snap["started"], 1)
+    return snap
+
+
 # ---------- job output store ----------
 # Every produced artifact is written to pc/output/<kind>/ so a job leaves a file
 # behind instead of only a base64 blob in the response.
@@ -1069,7 +1141,8 @@ def release_whisper_cache() -> bool:
     return had
 
 
-def _transcribe_with_whisper(tmp_path: str, wanted: str, language):
+def _transcribe_with_whisper(tmp_path: str, wanted: str, language, rid: str = "",
+                             initial_prompt: str = ""):
     # CTranslate2 4.x needs the CUDA 12 runtime (cublas64_12.dll/cudnn64_9.dll).
     # Default to CPU int8 so transcription works without those DLLs; set
     # WHISPER_DEVICE=cuda when the CUDA 12 libraries are installed.
@@ -1096,14 +1169,21 @@ def _transcribe_with_whisper(tmp_path: str, wanted: str, language):
                 f"({local_bin.stat().st_size} B); will use the HF download")
     source = str(local) if use_local else wanted
 
-    def _run(model) -> tuple[str, str, list]:
-        segs, info = model.transcribe(tmp_path, language=language, beam_size=1,
-                                      vad_filter=True)
+    def _run(model, rid: str = "", duration: float = 0.0) -> tuple[str, str, list]:
+        kwargs = {"language": language, "beam_size": 1, "vad_filter": True}
+        if initial_prompt:
+            kwargs["initial_prompt"] = initial_prompt
+        segs, info = model.transcribe(tmp_path, **kwargs)
         items = []
         for s in segs:
+            if rid and _job_cancelled(rid):
+                raise JobCancelled()
             txt = (s.text or "").strip()
             if not txt:
                 continue
+            if rid:
+                _job_update(rid, done=float(s.end),
+                            message=f"segment {len(items) + 1}")
             items.append({"start": round(float(s.start), 2),
                           "end": round(float(s.end), 2),
                           "text": txt})
@@ -1111,11 +1191,13 @@ def _transcribe_with_whisper(tmp_path: str, wanted: str, language):
         return text, getattr(info, "language", language), items
 
     try:
-        return _run(_get_whisper_model(source, device, compute))
+        return _run(_get_whisper_model(source, device, compute), rid)
+    except JobCancelled:
+        raise
     except Exception as e:
         if device == "cuda":
             logger.warning(f"whisper CUDA failed ({str(e)[:140]}); retrying on CPU int8")
-            return _run(_get_whisper_model(source, "cpu", "int8"))
+            return _run(_get_whisper_model(source, "cpu", "int8"), rid)
         raise
 
 
@@ -1152,14 +1234,54 @@ def _segments_to_vtt(segments: list) -> str:
     return "\n".join(lines)
 
 
-async def _transcribe_with_splitting(audio_path: Path, wanted: str, language):
+def _transcribe_chunked(audio_path: Path, wanted: str, language, rid: str = ""):
+    """Long file -> 5-minute chunks: gives real progress and a working cancel.
+
+    faster-whisper decodes the whole file before yielding the first segment, so
+    a single pass cannot report progress or be interrupted. Chunking with the
+    tail of the previous text as `initial_prompt` keeps the context.
+    """
+    try:
+        dur = float(get_audio_duration(audio_path) or 0.0)
+    except Exception:
+        dur = 0.0
+    if dur <= 600 or _job_cancelled(rid):
+        if rid and _job_cancelled(rid):
+            raise JobCancelled()
+        return _transcribe_with_whisper(str(audio_path), wanted, language, rid)
+
+    from unified.audio_splitter import split_audio_with_ffmpeg, cleanup_chunks
+    chunks = split_audio_with_ffmpeg(audio_path, chunk_seconds=300, overlap_seconds=0,
+                                     output_dir=Path(tempfile.gettempdir()))
+    _job_update(rid, total=dur, message=f"{len(chunks)} chunks")
+    texts, segments, prev = [], [], ""
+    try:
+        for idx, (chunk_path, start, end) in enumerate(chunks):
+            if _job_cancelled(rid):
+                raise JobCancelled()
+            text, _lang, segs = _transcribe_with_whisper(
+                str(chunk_path), wanted, language, "", initial_prompt=prev[-300:])
+            for seg in segs:
+                segments.append({"start": round(start + seg["start"], 2),
+                                 "end": round(min(start + seg["end"], end), 2),
+                                 "text": seg["text"]})
+            texts.append(text)
+            prev = (prev + " " + text).strip()[-400:]
+            _job_update(rid, done=end, message=f"chunk {idx + 1}/{len(chunks)}")
+    finally:
+        cleanup_chunks(chunks, keep_original=True)
+    return " ".join(texts).strip(), language, segments
+
+
+async def _transcribe_with_splitting(audio_path: Path, wanted: str, language,
+                                    rid: str = ""):
     """Transcribe long audio.
 
     faster-whisper handles long files with its own VAD, so splitting is only
     used for the remote WhisperApi fallback (and for legacy engines).
     """
     def _transcribe_single(path: Path, lang: Optional[str]) -> Tuple[str, str, list]:
-        return _transcribe_with_whisper(str(path), wanted, lang)
+        return _transcribe_with_whisper(str(path), wanted, lang, rid)
 
     try:
         import faster_whisper  # noqa: F401
@@ -1234,22 +1356,37 @@ async def transcriptions(
         _manager.ensure("audio", wanted)
     except ModelLoadingError as e:
         return _raise_loading(e)
+    _job_start(rid, "transcribe", 0.0, f"model={wanted}")
     logger.info(f"transcribe: {len(content)} bytes, model={wanted}, lang={language}")
     import tempfile
     tmp = None
     segments = []
+    duration_hint = 0.0
     try:
+        try:
+            duration_hint = float(get_audio_duration(Path(tmp)) or 0.0) if tmp else 0.0
+        except Exception:
+            duration_hint = 0.0
         with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as t:
             tmp = t.name
             t.write(content)
         try:
+            _job_update(rid, total=float(get_audio_duration(Path(tmp)) or 0.0))
+        except Exception:
+            pass
+        try:
             split_enabled = auto_split.lower() in ("true", "1", "yes", "on")
             logger.info(f"transcribe: starting engine (split={split_enabled})")
             if split_enabled:
-                text, lang, segments = await _transcribe_with_splitting(Path(tmp), wanted, language)
+                text, lang, segments = await _transcribe_with_splitting(
+                    Path(tmp), wanted, language, rid)
             else:
-                text, lang, segments = _transcribe_with_whisper(tmp, wanted, language)
+                text, lang, segments = await asyncio.to_thread(
+                    _transcribe_chunked, Path(tmp), wanted, language, rid)
             engine = "local"
+        except JobCancelled:
+            # Must not fall through to the proxy: the user asked to stop.
+            raise
         except Exception as e:
             logger.warning("local whisper missing (%s), proxy %s",
                              str(e)[:120], WHISPER_SERVICE_URL)
@@ -1266,6 +1403,7 @@ async def transcriptions(
                 text, lang = "[unified stub — start the WhisperApi service or install faster-whisper]", language
                 segments = []
                 engine = "stub"
+        _job_finish(rid, "done")
         fmt = (response_format or "json").strip().lower()
         if fmt in ("srt", "vtt"):
             body = _segments_to_srt(segments) if fmt == "srt" else _segments_to_vtt(segments)
@@ -1290,6 +1428,13 @@ async def transcriptions(
         meta = _store_output("text", ".txt", text.encode("utf-8"), rid)
         return {"text": text, "language": lang, "engine": engine,
                 "segments": segments, "outputs": [meta]}
+    except JobCancelled:
+        _job_finish(rid, "cancelled")
+        return JSONResponse(status_code=409, content={
+            "error": "cancelled", "request_id": rid})
+    except Exception as e:
+        _job_finish(rid, "error", str(e))
+        raise
     finally:
         try:
             if tmp:
@@ -1728,6 +1873,37 @@ async def media_info_endpoint(
             pass
 
 
+
+
+# ---------- jobs (progress / cancel) ----------
+
+@app.get("/v1/jobs")
+def list_jobs():
+    with _JOBS_LOCK:
+        items = [dict(j) for j in _JOBS.values()]
+    items.sort(key=lambda j: j.get("started", 0), reverse=True)
+    return {"count": len(items), "jobs": items[:50]}
+
+
+@app.get("/v1/jobs/{rid}")
+def get_job(rid: str):
+    snap = _job_snapshot(rid)
+    if snap.get("state") == "unknown":
+        return JSONResponse(status_code=404, content={"error": "unknown job"})
+    return snap
+
+
+@app.post("/v1/jobs/{rid}/cancel")
+def cancel_job(rid: str):
+    with _JOBS_LOCK:
+        job = _JOBS.get(rid)
+        if not job:
+            return JSONResponse(status_code=404, content={"error": "unknown job"})
+        if job["state"] != "running":
+            return {"id": rid, "state": job["state"], "cancelled": False}
+        job["cancel"] = True
+    logger.info("job %s: cancel requested", rid)
+    return {"id": rid, "state": "cancelling", "cancelled": True}
 
 
 # ---------- outputs ----------
