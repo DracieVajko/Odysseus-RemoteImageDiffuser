@@ -134,3 +134,15 @@ Effort: low–moderate (binary + wrapper + presets from `ffmpeg_tools.py`).
 4. Upscale — CPU fallback first, then ONNX.
 5. FFmpeg — bundled binary.
 6. Caption/Chat — SmolVLM ONNX (largest effort).
+
+## Status 2026-10-27
+
+On device (verified): generation, edits, inpaint, outpaint, harmonize, upscale
+(NCNN, CPU after a Vulkan self-check), caption and vision chat (llama.cpp +
+libmtmd), transcription/translation (whisper.cpp), model catalog with verified
+downloads, settings.
+
+Still PC-only: `/v1/ffmpeg/*` (7 operations). Bundling an ffmpeg build (or
+re-implementing the operations with MediaCodec/MediaMuxer) is the remaining
+piece of endpoint parity; until then the route answers 503 with a reason rather
+than pretending.

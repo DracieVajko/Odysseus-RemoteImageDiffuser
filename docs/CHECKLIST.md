@@ -471,3 +471,153 @@ server). It found three real bugs that HTTP-200 tests never would:
 - [x] Engine init has a single code path: `unified/engine.init_diffusion_engine`
       delegates to `diffusion_server.ensure_registry()` instead of building a
       second argparse Namespace that could drift from the CLI.
+
+## Android + WebUI implementation audit (2026-10-27)
+
+WebUI (static + live DOM audit):
+- [x] 94 element ids, no duplicates; every handler name in `onclick/onchange`
+      exists; every `getElementById` target exists; all 22 fetch targets map to
+      real routes; 9 tabs switch correctly and only the image tabs show the
+      image-model select; no console errors; light/dark palettes both compute.
+- [x] `/v1/settings` reported `port: 8101` (hardcoded) and `engines.onnxruntime`
+      / `whisper_native` were never sent, so the Settings tab always said "no".
+      The endpoint now uses the real request port and reports both engines;
+      the whisper line shows "local (faster-whisper)" plus the remote URL.
+- [x] Verified: settings on 8102 -> `port 8102`, all engines detected.
+
+Android:
+- [x] `/v1/images/outpaint` was missing (PC has it). Implemented with the LCM
+      inpaint engine: edge-replicated padding, white border mask, 2048 px/side
+      and 4 MP caps, returns input/output sizes and margins.
+- [x] `/v1/chat/completions` threw "not available on device" although the
+      SmolVLM engine exists. Implemented OpenAI-shape vision chat (text + first
+      data-URL image) through SmolVLMEngine.
+- [x] `SmolVlmEngine` called JNI that is not compiled (`smolvlm_jni.cpp` does
+      not exist), so caption/chat would die on `UnsatisfiedLinkError` (an
+      Error, not an Exception). Added a `nativeAvailable` probe and an honest
+      503 ("VLM runtime not bundled") for caption and chat; the native call is
+      wrapped in `catch (Throwable)`.
+- [x] Real-ESRGAN weight selection was non-deterministic: the release zip ships
+      five models and `firstOrNull { .param }` could pick
+      `realesr-animevideov3-x2`, breaking the 4x tile math. Now it prefers
+      `realesrgan-x4plus.param/.bin`, pairs the matching `.bin`, and logs the
+      chosen weights.
+- [x] `/v1/ffmpeg/{op}` said "use Remote mode" (a mode that no longer exists).
+      Message now says ffmpeg is not bundled in the Android build yet.
+- [x] Generations/edits responses now carry `engine` (like the PC), the dead
+      1x1 `STUB_PNG_B64` was removed, and the VLM catalog notes no longer claim
+      "runs via PC in Auto/Remote mode".
+- [x] Catalog URLs re-verified: 12/13 return 200 (`ggml-large-v3-turbo-q5_0`,
+      both SmolVLM GGUF+mmproj sets, all 6 LCM ONNX files). The one "404" is the
+      `…/resolve/main` base constant, not a file.
+- [x] `assembleDebug` **BUILD SUCCESSFUL** (71.2 MB); APK contains
+      `libncnn.so`, `librealesrgan_jni.so`, `libwhisper.so`, `libonnxruntime.so`.
+- [ ] Not done: an outpaint toggle in the Android UI (API only), and on-device
+      verification of the new endpoints (needs USB/ADB, blocked while the phone
+      is a hotspot).
+
+## Repository hygiene pass (2026-10-27)
+
+Audit scope: 163 tracked files (2.0 MB), working tree, `.gitignore`, docs,
+scripts, requirements, contracts.
+
+- [x] **Tracked-but-ignored files:** none. No build outputs, caches, logs,
+      model weights, binaries or `.env` files are tracked (biggest tracked files
+      are test fixtures: `jfk.wav` 0.35 MB, `tone_3s.wav`, `test_5s.mp4`).
+- [x] **Secrets:** none. The only "credential" hit is the literal
+      `api_key="not-needed"` example in `docs/ARCHITECTURE.md`.
+- [x] **Personal addresses removed:** `100.88.219.120` (Tailscale) was hardcoded
+      in `Switch-Service-ToUnified.ps1`, `migrate-service-paths.ps1` and a
+      `test_api.py` docstring; `192.168.1.60` (the phone) in
+      `android/contract-compat.md`. The scripts now read `PRISM_ALLOWED_HOST`,
+      docs use placeholders. Remaining IPs are generic examples
+      (`192.168.1.50`, `100.64.0.0/10`).
+- [x] **Temporary-looking files:** `android/tools/tools_fetch_tmp.ps1` and
+      `tools_ndk_tmp.ps1` were real setup scripts → renamed to
+      `fetch-cmdline-tools.ps1` and `install-ndk.ps1`. No `fix*.py`, `tmp_*`,
+      `old_*`, `notes.md` or `scratch.md` remain.
+- [x] **Debug leftovers:** no `pdb`/`breakpoint()`/`debugger`/`console.log`.
+      One `TODO` string in `ModelDownloader.kt` is a "no pinned SHA" sentinel,
+      not a code TODO.
+- [x] **`.gitignore` hardened:** secrets (`.env*`, `*.pem`, `*.key`, `*.p12`,
+      `credentials.*`), caches (`.pytest_cache/`, `.mypy_cache/`, `.ruff_cache/`,
+      `node_modules/`), coverage, archives (`*.zip`, `*.7z`), model formats
+      (`*.onnx`, `*.gguf`, `*.h5`, `*.npz`), Android lint/`.kotlin`, editor
+      files.
+- [x] **Docs classified:** `docs/HANDOFF.md` marked a historical snapshot
+      (source of truth = CHECKLIST/CHECKPOINTS); `docs/ODYSSEUS-CONTRACT.md`
+      marked superseded with a pointer to `pc/docs/UNIFIED-CONTRACT.md`, which
+      gained the missing `/v1/images/outpaint` row. No `.md` was deleted.
+- [x] **Binary in git justified:** `pc/scripts/nssm.exe` (337 920 B, NSSM 2.24,
+      public domain) documented in `pc/scripts/NSSM.md` with version, license,
+      size and SHA256; the upstream site is unreliable, so it stays vendored.
+- [x] **Dependencies:** removed pins nothing imports (`optimum-quanto`, `ninja`,
+      `typer`, `rich`, `shellingham`, `markdown-it-py`, `mdurl`, `Pygments`);
+      runtime packages (`torch`, `diffusers`, `transformers`, `onnxruntime`,
+      `fastapi`, `uvicorn`) stay pinned.
+- [x] **Verification:** `pytest` 44 passed, PowerShell parser clean on the edited
+      scripts, light server suite 20/20, `git ls-files -i -c --exclude-standard`
+      empty.
+
+## Android parity with the PC endpoints (2026-10-27)
+
+- [x] **Caption and chat run on the phone.** llama.cpp + libmtmd are built as a
+      separate Gradle/CMake module (`:smolvlm`), because the app's CMake project
+      already defines `ggml` for whisper.cpp and two projects cannot share it.
+      `libsmolvlm_jni.so` (6.6 MB, static llama+ggml) ships in the APK; the GGUF
+      is downloaded by the model manager like any other asset.
+      Verified on device: caption 8.5 s ("In this image, we can see a red color
+      object."), chat 7.1 s answers "Red." (chat template applied, no Q&A loop).
+- [x] **New endpoints on Android:** `/v1/models/status/{id}` and
+      `/v1/models/verify/{id}` (PC parity), plus `/v1/images/outpaint` from the
+      previous step. `/v1/chat/completions` is a real implementation instead of
+      a `ModelWillNotLoadError`.
+- [x] **UI:** the Inpaint tab gained an "outpaint (25%)" mode (no mask needed,
+      reports the output size); Caption already covers vision Q&A with a prompt.
+- [x] Only PC-only feature left: `/v1/ffmpeg/*` (503 with a reason, documented
+      in `docs/ONDEVICE-PLAN.md`).
+
+## Android device freeze — root cause and fixes (2026-10-27)
+
+During a live run the phone became unresponsive for minutes and the launcher
+restarted. The device did **not** reboot (`uptime` stayed continuous); what died
+was SystemUI/launcher after the system killed the app: `dumpsys activity
+exit-info` shows `reason=3 (LOW_MEMORY)` for pid 21358 at 10:33 and pid 5976 at
+10:45, with swap at 3.8 GB. Three code problems plus one policy problem:
+
+- [x] **Engine residency.** `switchTo()` freed the image pipeline for
+      upscale/VLM but not for audio, so LCM (~2-3 GB) stayed resident while
+      whisper loaded. Any non-image switch now releases it, and `onTrimMemory`
+      drops the image/upscale engines on RUNNING_LOW and the VLM/whisper on
+      RUNNING_CRITICAL.
+- [x] **Invalid LCM size.** Outpaint asked for 288 px; the UNet halves latents
+      three times and 288/8 = 36 is not divisible by 8, so ORT failed in
+      `/up_blocks.1/Concat`. `lcmSize()` now rounds to a multiple of 64
+      (256..512) for inpaint, outpaint and generation.
+- [x] **Unbounded upscale.** 512 -> 2048 on the CPU kept the phone busy for
+      >6 minutes (378 s, then a disconnect). The mobile cap is 1536 px on the
+      long side (400 otherwise), ncnn runs with 2 threads instead of 4, and the
+      tile loop runs at `THREAD_PRIORITY_BACKGROUND`.
+- [x] **Residency policy.** Android no longer keeps engines between requests:
+      every engine (LCM, ncnn, VLM, whisper) is released after 45 s idle instead
+      of the PC's 10 minutes, a 15 s watchdog releases everything when available
+      RAM drops below 1.5 GB, and `requireMemory()` refuses to *load* an engine
+      when the phone is already tight (503 with the numbers instead of a kill).
+- [x] Live suite: **19/19** on a relaxed device (generate 16.1 s / 7.8 s warm,
+      edit 8.3 s, inpaint 11.0 s with outside 0.00, outpaint 19.2 s, upscale
+      24.5 s, caption 8.5 s, chat 7.1 s, transcribe 31.2 s, translations 35.1 s).
+      With other apps holding memory the guard now answers 503 instead of
+      letting LMKD kill the process.
+
+| Device check | Result |
+|---|---|
+| generate 256x256 | 16.1 s cold, 7.8 s warm, std 23.4 |
+| edit (img2img) | 8.3 s, mean\|diff\| 62.8 |
+| inpaint add | 11.0 s, inside 97.3, outside **0.00** |
+| outpaint 192 -> 288 | 19.2 s, centre **0.00** |
+| upscale 4x 256 -> 1024 | 24.5 s, std 66.1, `realesrgan-ncnn` |
+| upscale 512 -> 2048 | 400 with the cap message |
+| caption / chat | 8.5 s / 7.1 s, correct answers |
+| transcribe / translations | 31.2 s / 35.1 s, exact JFK text |
+| ffmpeg | 503 with the reason |
+| process | PID stable, no LOW_MEMORY exit after the fix |

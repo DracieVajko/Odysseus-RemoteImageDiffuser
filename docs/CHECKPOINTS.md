@@ -612,3 +612,123 @@ the size they asked for), then ONNX, then text2img, then a placeholder, and the
 `engine` field says which one produced the pixels. Verified with a 640x384 edit
 on DreamShaper_8: `engine=diffusers`, output 640x384, mean|diff| 17.8 against the
 source.
+
+## Implementation audit: WebUI + Android (2026-10-27)
+
+**WebUI.** The audit is static (ids, handlers, fetch targets, routes) plus a
+live DOM pass, because a screenshot cannot prove that a dropdown is wired to
+the right kind. It found one truthfulness bug: `/v1/settings` hardcoded
+`port: 8101` and never sent `onnxruntime` / `whisper_native`, so the Settings
+tab always printed "no". Both are fixed; the port now comes from the request.
+
+**Android VLM.** `SmolVlmEngine` was written against a JNI bridge that does not
+exist in the repo (`cpp/smolvlm_jni.cpp` is absent, `libsmolvlm_jni.so` is not
+in the APK). The engine is kept, the capability is probed (`nativeAvailable`)
+and both caption and chat answer 503 with the reason instead of throwing
+`UnsatisfiedLinkError` inside the request. Chat is now implemented end to end
+so it works as soon as the bridge is added.
+
+**Android upscale.** The catalog downloads the official `realesrgan-ncnn-vulkan`
+zip, which contains `realesrgan-x4plus` (4x) plus `realesr-animevideov3-x2/x3/x4`
+and `realesrgan-x4plus-anime`. The engine assumed 4x and picked the first
+`.param` it found, so a 2x anime model could break the tile arithmetic. Weight
+selection is now explicit and logged.
+
+**Outpaint parity.** Android and PC expose the same `/v1/images/outpaint`
+contract (margin or per-side pixels, caps, `input_size`/`output_size`), so an
+OpenAI-style client can move between them.
+
+## Repository hygiene pass (2026-10-27)
+
+**Principle applied:** a clone must explain itself — what is authoritative,
+what is generated, what is personal. The audit therefore started from the
+tracked file list, not from the directory tree, because ignored files can hide
+generated junk and tracked files can hide personal data.
+
+**Vendored binary decision.** `pc/scripts/nssm.exe` stays in git. The service
+scripts must work offline and `nssm.cc` returned HTTP 503 during the audit, so a
+fetch-on-demand script would be a single point of failure. The compromise is
+provenance: `pc/scripts/NSSM.md` pins version 2.24, the public-domain license,
+the exact size and SHA256, and documents the verification command.
+
+**Personal addresses.** Tailscale (`100.88.219.120`) and the phone's LAN IP
+(`192.168.1.60`) were baked into scripts and docs. They are now environment
+variables (`PRISM_ALLOWED_HOST`) or placeholders, so the same files work for any
+machine without editing and without publishing someone's network layout.
+
+**Docs are classified, not deleted.** `HANDOFF.md` is a dated snapshot and is
+marked historical; `ODYSSEUS-CONTRACT.md` is a frozen subset and points at the
+current contract. One authoritative chain remains: README → docs/ARCHITECTURE →
+pc/docs/UNIFIED-CONTRACT (+ android/contract-compat for parity).
+
+**Dependency trim.** Eight pins (`optimum-quanto`, `ninja`, `typer`, `rich`,
+`shellingham`, `markdown-it-py`, `mdurl`, `Pygments`) had zero references in
+`pc/`. They came from a CLI/quantisation path the product does not use; removing
+them shrinks a fresh install and removes a source of version conflicts.
+
+**Evidence:** `git ls-files` 163 files / 2.0 MB; no tracked-but-ignored files;
+no secrets; PowerShell tokenizer reports zero parse errors for the edited
+scripts; `pytest` 44 passed; light server suite 20/20.
+
+## Android device verification (2026-10-27)
+
+**Why these bugs only appeared on hardware.** The manifest bug needs a real
+install (the code path runs `unzipArchives` before writing the manifest), the
+bitmap bug needs `Bitmap.createBitmap` returning the source object for a
+full-size subset, and the Vulkan bug needs a driver that mis-executes the graph.
+None of them is visible from code review alone.
+
+**Manifest order.** `isReady()` reads `<id>.READY` and checks every listed file.
+Recording the archive name after the archive was deleted made the model
+permanently "not installed" while the UI showed 100 %. The manifest is now
+derived from the extracted tree, so archives and plain files are both correct.
+
+**Vulkan verdict.** Rather than disabling Vulkan for everyone, the bridge
+compares input and output dynamic range: ESRGAN keeps or widens contrast, so an
+output range below 25 % of the input range means the graph did not run. That
+test is cheap, has no false positives on flat tiles (which are skipped), and
+keeps Vulkan for GPUs where it works. The engine remembers the verdict so the
+first failing request pays the ~1 s detection cost only once.
+
+**CPU cost.** 512 -> 2048 in 34.7 s with 4 threads on the phone. Vulkan would be
+faster, but a black image is worse than a slow one; the detection keeps the
+correct result.
+
+**Evidence:** logcat lines quoted in `docs/CHECKLIST.md`, PNG artifacts saved in
+`%TEMP%` (`android_upscale_2048.png`, `android_upscale_1024.png`,
+`android_outpaint_384.png`), PID stable, no crashes.
+
+## Android parity and the LOW_MEMORY freeze (2026-10-27)
+
+**Why a separate CMake project for the VLM.** whisper.cpp (already vendored for
+transcription) defines the CMake target `ggml`. Adding llama.cpp to the same
+build tree silently reuses whisper's older ggml headers and the build fails with
+`ggml_backend_sched_set_copy_callback` / `ggml_top_k_mask` undeclared. The
+`:smolvlm` Gradle module builds llama.cpp + libmtmd statically into its own
+`libsmolvlm_jni.so`, so both ggml copies stay isolated and no duplicate `.so`
+name enters the APK.
+
+**Chat needs the model's chat template.** Feeding a plain completion made the
+500M model keep talking ("Question: ... Answer: ...") after the answer.
+`llama_chat_apply_template()` with a single user message (image marker inside
+the content) gives a clean stop at the assistant turn: "Red." instead of a
+dialogue transcript.
+
+**The freeze.** The device did not reboot (`uptime` was continuous); SystemUI
+and the launcher restarted after Android killed the app with `reason=3
+(LOW_MEMORY)` — twice, at 10:33 and 10:45, with 3.8 GB of swap in use. The
+product rule for the phone is therefore stricter than for the PC: **no engine
+residency**. Engines are released after 45 s idle, a 15 s watchdog frees
+everything below 1.5 GB available, and `requireMemory()` refuses to load an
+engine when the phone is already tight (503 with the numbers). Residency is what
+turns a slow request into a dead launcher; a 5-20 s engine reload is the cheaper
+trade on a device that also runs WhatsApp, Instagram and Outlook.
+
+**Upscale cost.** 512 -> 2048 is ~9 CPU tiles; at 4 threads it starved the
+system for 6+ minutes. 2 threads + background priority + a 1536 px cap keeps
+the phone usable, at the price of refusing the largest jobs. This is a product
+trade-off, not a bug: the PC product still does 2048 and 4x on a GPU.
+
+**Evidence:** `dumpsys activity exit-info` (LOW_MEMORY at 10:33:51), logcat
+`non-zero status ... Concat` for the 288 px case, and a 19/19 device suite after
+the fixes.
