@@ -657,3 +657,23 @@ with Android's own media stack (`MediaExtractor`/`MediaMuxer`/`MediaCodec`) in
       between long calls (transcribe 112 s, translations 211 s in the same run).
       That is the deliberate stability trade on a phone that also runs daily
       apps; the PC keeps models resident.
+
+## Android: the crash behind "server disconnected" (2026-10-27)
+
+- [x] `dumpsys activity exit-info` finally showed
+      `reason=4 (APP CRASH(EXCEPTION))`: `DiffusionService.onCreate` called
+      `startForeground()`, which Android 12+ forbids when the app was started
+      from the background (`am start` on a sleeping phone,
+      `ForegroundServiceStartNotAllowedException`, `mAllowStartForeground false`).
+      The uncaught exception killed the whole process, so every request after
+      that hit "server disconnected".
+- [x] `startForeground()` is now guarded: the server keeps running without the
+      notification instead of taking the process down; `toggleServer()` catches
+      the start restriction, resets the UI state and asks the user to open the
+      app.
+- [x] This also explains the earlier 19-minute caption hang (the process died
+      mid-request) and the repeated "server disconnected" runs.
+- [x] After the fix: Android suite **27/27** (caption 7.5 s, chat 6.7 s,
+      transcribe 26 s, all nine ffmpeg checks including MP3).
+- [x] PC suite **39/39** after the one-GPU-engine fix (inpaint 52 s on
+      `onnx-inpaint` instead of 321 s, outpaint 23 s, no CUDA 719 crash).

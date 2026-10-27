@@ -774,3 +774,14 @@ minimal `config.h` is force-included with `-include`, and `util.h` references
 `ieee754_float32_t`, which autoconf normally provides. Output is validated
 externally: the phone produces a 222 480-byte file that the PC's ffprobe reads
 as MP3, 11.12 s, 160 kbps, and ffmpeg decodes without warnings.
+
+**The FGS crash (2026-10-27).** Three test runs ended with "server disconnected"
+for no visible reason. `dumpsys activity exit-info` had the answer:
+`reason=4 (APP CRASH(EXCEPTION))` — `DiffusionService.onCreate()` calls
+`startForeground()`, and Android 12+ rejects the promotion when the app was
+launched from the background (`mAllowStartForeground false`). The uncaught
+`RuntimeException` killed the process, which also explains the 19-minute caption
+"hang" (the process was already dead). `startForeground()` is now inside a
+try/catch and the server continues without the notification; `toggleServer()`
+reports the restriction instead of crashing. With this fixed the Android suite
+is 27/27 and the same run that used to die on caption now finishes in seconds.
