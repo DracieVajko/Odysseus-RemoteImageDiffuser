@@ -143,8 +143,11 @@ libmtmd), transcription/translation (whisper.cpp), model catalog with verified
 downloads, settings.
 
 `/v1/ffmpeg/*` is implemented on device with MediaCodec/MediaMuxer (info,
-images, trim, audio extraction, container remux, AAC and WAV encoding). What the
-platform cannot do (FLAC/Opus/AVIF encoding, VP9/WebM, video re-encode and
-compression) answers 503 with the reason. There is no remaining PC-only
-endpoint; the difference is depth: the PC can transcode and compress video, the
-phone copies and remuxes.
+images, trim, audio extraction, container remux, AAC and WAV encoding). Video
+re-encode/compression is now also implemented via MediaCodec + an EGL/GL bridge
+(`/v1/ffmpeg/compress`, `mp4-small` preset, ~5 MB target) in
+`VideoTranscoder.kt`. What the platform still cannot do (FLAC/Opus/AVIF
+encoding, VP9/WebM, H.265 transcode) answers 503 with the reason. There is no
+remaining PC-only endpoint; the difference is depth: the PC can transcode to
+arbitrary codecs and target sizes, the phone re-encodes to H.264 at a fixed
+target.
