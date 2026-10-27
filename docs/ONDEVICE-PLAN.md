@@ -142,7 +142,9 @@ On device (verified): generation, edits, inpaint, outpaint, harmonize, upscale
 libmtmd), transcription/translation (whisper.cpp), model catalog with verified
 downloads, settings.
 
-Still PC-only: `/v1/ffmpeg/*` (7 operations). Bundling an ffmpeg build (or
-re-implementing the operations with MediaCodec/MediaMuxer) is the remaining
-piece of endpoint parity; until then the route answers 503 with a reason rather
-than pretending.
+`/v1/ffmpeg/*` is implemented on device with MediaCodec/MediaMuxer (info,
+images, trim, audio extraction, container remux, AAC and WAV encoding). What the
+platform cannot do (MP3/FLAC/Opus/AVIF encoding, VP9/WebM, video re-encode and
+compression) answers 503 with the reason. There is no remaining PC-only
+endpoint; the difference is depth: the PC can transcode and compress video, the
+phone copies and remuxes.

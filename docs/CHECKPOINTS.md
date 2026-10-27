@@ -732,3 +732,34 @@ trade-off, not a bug: the PC product still does 2048 and 4x on a GPU.
 **Evidence:** `dumpsys activity exit-info` (LOW_MEMORY at 10:33:51), logcat
 `non-zero status ... Concat` for the 288 px case, and a 19/19 device suite after
 the fixes.
+
+## FFmpeg without ffmpeg (2026-10-27)
+
+**Why not bundle the binary.** The PC product shells out to `ffmpeg`, but the
+Android app cannot: ffmpeg-kit was retired from Maven in 2025, and a self-built
+static ffmpeg with libx264/libmp3lame/libvpx would add 20-40 MB per ABI plus a
+GPL-3 obligation to an MIT-licensed product. The phone already ships H.264/HEVC
+and AAC codecs, so the operations that matter are re-implemented on top of
+`MediaExtractor`/`MediaMuxer`/`MediaCodec`.
+
+**What the media stack decides.** Remuxing (container change, trim, audio
+extraction) is lossless and fast. AAC encoding works because Android has an AAC
+encoder; WAV output is written by hand (RIFF header + linear resampling). MP3
+cannot be produced by any Android API, FLAC/Opus containers are not supported by
+`MediaMuxer`, and re-encoding video needs an EGL pipeline — those answer 503 with
+the exact reason instead of failing later.
+
+**PCM sources.** A WAV file has no MediaCodec decoder (`audio/raw`), so the
+audio path reads samples straight from the extractor. The first attempt fed
+extractor chunks into the encoder input buffer and died with a null
+CodecException (buffer smaller than the chunk); the working version decodes to a
+PCM array first and then streams 1024-frame chunks into the AAC encoder.
+
+**Automation hook.** Starting the server from adb needed two entry points:
+`am start` re-runs `onCreate` only when the activity was not alive, otherwise the
+extra arrives in `onNewIntent`. Both call `toggleServer()` when
+`--ez start_server true` is present, so a test run no longer depends on tapping
+a button on a locked screen.
+
+**Evidence:** 27/27 live checks on the phone, nine of them ffmpeg, including the
+honest 503s for mp3 and compress.

@@ -621,3 +621,34 @@ exit-info` shows `reason=3 (LOW_MEMORY)` for pid 21358 at 10:33 and pid 5976 at
 | transcribe / translations | 31.2 s / 35.1 s, exact JFK text |
 | ffmpeg | 503 with the reason |
 | process | PID stable, no LOW_MEMORY exit after the fix |
+
+## FFmpeg tools on Android (2026-10-27)
+
+Bundling ffmpeg is not possible without shipping a 20-40 MB GPL binary per ABI
+(ffmpeg-kit was retired from Maven in 2025), so the operations are implemented
+with Android's own media stack (`MediaExtractor`/`MediaMuxer`/`MediaCodec`) in
+`MediaTools.kt`. No extra permissions, no extra download, no licence change.
+
+- [x] `GET /v1/ffmpeg/presets` returns the same groups as the PC (video, audio,
+      image, resize) with `supported` + `reason` per preset.
+- [x] Working on device: `info` (streams, duration, bitrate), `convert-image`
+      (jpg-95/85, png, webp), `trim` (sample-copy, no re-encode),
+      `extract-audio` (AAC track copied to m4a), `convert-video` (remux to MP4
+      when the source codec matches), `convert-audio` to AAC (decode + AAC
+      encoder, including WAV/PCM sources) and to WAV 16 kHz mono (linear
+      resampler + hand-written RIFF header).
+- [x] Honest 503 with the reason for what the platform cannot do: MP3 (no
+      encoder in Android), FLAC/Opus (no container muxer), AVIF, VP9/WebM and
+      any video re-encode/compression (needs an EGL/MediaCodec pipeline).
+- [x] Headless start for automation: `adb shell am start -n
+      eu.odysseus.diffusion/.MainActivity --ez start_server true` (handled in
+      `onCreate` and `onNewIntent`, because `am start` on a live activity does
+      not re-run `onCreate`).
+- [x] Device results: **27/27** live checks, including 9 ffmpeg checks —
+      info 5.0 s with video+audio streams, png->jpg 3385 B, extract-audio
+      46 790 B m4a, trim 1..3 s -> 2.00 s, audio -> aac 136 864 B,
+      audio -> wav 16 kHz mono 352 044 B, mp3/compress -> 503, empty -> 400.
+- [x] Note on speed: with the 45 s idle release the whisper model reloads
+      between long calls (transcribe 112 s, translations 211 s in the same run).
+      That is the deliberate stability trade on a phone that also runs daily
+      apps; the PC keeps models resident.
