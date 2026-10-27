@@ -657,22 +657,95 @@ class ApiServer(
 // FFmpeg Tools: not available on device yet (MediaCodec covers audio
 // decoding for whisper).
             get("/v1/ffmpeg/presets") {
-                call.respond(
-                    HttpStatusCode.ServiceUnavailable,
-                    jsonOf("error" to "ffmpeg tools run on PC (:8101) or via Remote mode"),
-                )
+                call.respond(MediaTools.presetsJson())
             }
             post("/v1/ffmpeg/{op}") {
-                // ffmpeg is not bundled in the APK yet (docs/ONDEVICE-PLAN.md):
-                // answer 503 with a reason instead of pretending it worked.
-                call.respond(
-                    HttpStatusCode.ServiceUnavailable,
-                    jsonOf(
-                        "error" to "will not load",
-                        "detail" to "ffmpeg tools are not bundled in the Android build yet; " +
-                            "use the PC product (pc/) for /v1/ffmpeg/*",
-                    ),
-                )
+                val op = call.parameters["op"] ?: ""
+                var bytes = ByteArray(0)
+                var filename = "input"
+                var preset = ""
+                var startS = ""
+                var endS = ""
+                var quality = "0"
+                call.receiveMultipart().forEachPart { part ->
+                    when (part) {
+                        is PartData.FileItem -> if (part.name == "file") {
+                            filename = part.originalFileName ?: "input"
+                            bytes = part.provider().readBytes()
+                        }
+                        is PartData.FormItem -> when (part.name) {
+                            "preset" -> preset = part.value
+                            "start" -> startS = part.value
+                            "end" -> endS = part.value
+                            "quality" -> quality = part.value
+                            else -> {}
+                        }
+                        else -> {}
+                    }
+                    part.dispose()
+                }
+                if (bytes.isEmpty()) {
+                    call.respond(HttpStatusCode.BadRequest, jsonOf("error" to "Empty file"))
+                    return@post
+                }
+                val ctx = appContext ?: run {
+                    call.respond(HttpStatusCode.InternalServerError, jsonOf("error" to "no app context"))
+                    return@post
+                }
+                val suffix = "." + filename.substringAfterLast('.', "bin").lowercase()
+                val tmp = File(ctx.cacheDir, "ffmpeg_in_${System.currentTimeMillis()}$suffix")
+                val httpRid = UUID.randomUUID().toString()
+                try {
+                    tmp.writeBytes(bytes)
+                    lastHeavyUse = System.currentTimeMillis()
+                    val result = withContext(heavyDispatcher) {
+                        when (op) {
+                            "info" -> null to MediaTools.info(tmp)
+                            "convert-image" -> MediaTools.convertImage(
+                                tmp, preset.ifEmpty { "jpg-95" }, quality.toIntOrNull() ?: 0) to null
+                            "convert-audio" -> MediaTools.convertAudio(
+                                tmp, preset.ifEmpty { "aac-192" }) to null
+                            "convert-video" -> MediaTools.remux(
+                                tmp, preset.ifEmpty { "mp4-h264" }) to null
+                            "extract-audio" -> MediaTools.extractAudio(
+                                tmp, preset.ifEmpty { "aac-192" }) to null
+                            "trim" -> MediaTools.trim(
+                                tmp,
+                                startS.toDoubleOrNull() ?: 0.0,
+                                endS.toDoubleOrNull() ?: 0.0) to null
+                            "compress" -> MediaTools.compress(tmp, preset.ifEmpty { "web-720p" }) to null
+                            else -> throw MediaTools.Unsupported("unknown operation: $op")
+                        }
+                    }
+                    val (fileOut, infoOut) = result
+                    if (fileOut == null) {
+                        call.respond(jsonOf("info" to infoOut, "request_id" to httpRid))
+                        return@post
+                    }
+                    val info = mapOf(
+                        "duration" to null,
+                        "size" to fileOut.bytes.size,
+                        "format" to fileOut.mime,
+                    )
+                    call.respond(
+                        jsonOf(
+                            "file" to android.util.Base64.encodeToString(fileOut.bytes, android.util.Base64.NO_WRAP),
+                            "filename" to fileOut.name,
+                            "elapsed" to 0,
+                            "request_id" to httpRid,
+                            "engine" to "android-mediacodec",
+                            "info" to info,
+                        ),
+                    )
+                } catch (e: MediaTools.Unsupported) {
+                    call.respond(HttpStatusCode.ServiceUnavailable, jsonOf(
+                        "error" to "will not load", "detail" to (e.message ?: "unsupported operation")))
+                } catch (e: Exception) {
+                    call.respond(HttpStatusCode.InternalServerError, jsonOf(
+                        "error" to "ffmpeg operation failed: ${e.message}"))
+                } finally {
+                    try { tmp.delete() } catch (_: Exception) {}
+                }
             }
             post("/v1/images/generations") {
                 val req = wireJson.decodeFromString<GenerationReq>(call.receiveText())

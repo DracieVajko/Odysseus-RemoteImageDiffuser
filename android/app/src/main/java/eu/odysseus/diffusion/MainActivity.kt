@@ -297,6 +297,11 @@ class MainActivity : AppCompatActivity() {
             tabButtons.add(btn)
         }
         selectTab(0)
+        // Headless start for tests / automation:
+        //   adb shell am start -n eu.odysseus.diffusion/.MainActivity --ez start_server true
+        if (intent?.getBooleanExtra("start_server", false) == true) {
+            window.decorView.post { if (!serverRunning) toggleServer() }
+        }
         tabBar.post { selectTab(0) }
 
         renderLog()
@@ -304,6 +309,15 @@ class MainActivity : AppCompatActivity() {
         log("app started")
         refreshServerState()
         handler.postDelayed(ticker, 1500)
+    }
+
+    override fun onNewIntent(intent: android.content.Intent?) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        // `am start` on an already running activity delivers here, not to onCreate.
+        if (intent?.getBooleanExtra("start_server", false) == true && !serverRunning) {
+            window.decorView.post { toggleServer() }
+        }
     }
 
     override fun onDestroy() {
