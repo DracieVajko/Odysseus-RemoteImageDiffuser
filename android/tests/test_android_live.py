@@ -226,6 +226,81 @@ def main():
         assert r.status_code == 200, r.text[:200]
         return f"{len(r.json().get('text') or '')} chars"
 
+    # ---------------------------------------------------------- ffmpeg tools
+    def ff_presets():
+        j = c.get("/v1/ffmpeg/presets").json()
+        assert j.get("engine") == "android-mediacodec", j.get("engine")
+        sup = sum(1 for g in ("video", "audio", "image")
+                  for v in j[g].values() if v.get("supported"))
+        assert sup >= 10, sup
+        return f"{len(j['video'])} video / {len(j['audio'])} audio / {len(j['image'])} image, {sup} supported"
+
+    def ff_info():
+        files = {"file": ("t.mp4", (TD / "video" / "test_5s.mp4").read_bytes(), "video/mp4")}
+        r = c.post("/v1/ffmpeg/info", files=files)
+        assert r.status_code == 200, r.text[:160]
+        info = r.json()["info"]
+        kinds = [x["codec_type"] for x in info["streams"]]
+        assert "video" in kinds and "audio" in kinds, kinds
+        return f"{info['duration_s']:.1f}s {kinds}"
+
+    def ff_image():
+        files = {"file": ("t.png", (TD / "images" / "test_512.png").read_bytes(), "image/png")}
+        r = c.post("/v1/ffmpeg/convert-image", files=files, data={"preset": "jpg-95"})
+        assert r.status_code == 200, r.text[:160]
+        raw = base64.b64decode(r.json()["file"])
+        assert raw[:2] == b"\xff\xd8", raw[:4]
+        return f"{len(raw)} B JPEG"
+
+    def ff_extract():
+        files = {"file": ("t.mp4", (TD / "video" / "test_5s.mp4").read_bytes(), "video/mp4")}
+        r = c.post("/v1/ffmpeg/extract-audio", files=files)
+        assert r.status_code == 200, r.text[:160]
+        raw = base64.b64decode(r.json()["file"])
+        assert raw[4:8] == b"ftyp", raw[:12]
+        return f"{len(raw)} B m4a"
+
+    def ff_trim():
+        files = {"file": ("t.mp4", (TD / "video" / "test_5s.mp4").read_bytes(), "video/mp4")}
+        r = c.post("/v1/ffmpeg/trim", files=files, data={"start": "1", "end": "3"})
+        assert r.status_code == 200, r.text[:160]
+        raw = base64.b64decode(r.json()["file"])
+        r2 = c.post("/v1/ffmpeg/info", files={"file": ("trim.mp4", raw, "video/mp4")})
+        dur = r2.json()["info"].get("duration_s") or 0
+        assert 1.5 <= dur <= 3.5, f"trimmed duration {dur}"
+        return f"{dur:.2f}s"
+
+    def ff_audio_aac():
+        files = {"file": ("t.wav", (TD / "audio" / "jfk.wav").read_bytes(), "audio/wav")}
+        r = c.post("/v1/ffmpeg/convert-audio", files=files, data={"preset": "aac-128"})
+        assert r.status_code == 200, r.text[:160]
+        raw = base64.b64decode(r.json()["file"])
+        assert raw[4:8] == b"ftyp", raw[:12]
+        return f"{len(raw)} B m4a"
+
+    def ff_audio_wav16k():
+        files = {"file": ("t.wav", (TD / "audio" / "jfk.wav").read_bytes(), "audio/wav")}
+        r = c.post("/v1/ffmpeg/convert-audio", files=files, data={"preset": "wav-16k"})
+        assert r.status_code == 200, r.text[:160]
+        raw = base64.b64decode(r.json()["file"])
+        assert raw[:4] == b"RIFF", raw[:4]
+        rate = int.from_bytes(raw[24:28], "little")
+        ch = int.from_bytes(raw[22:24], "little")
+        assert rate == 16000 and ch == 1, f"{rate} Hz {ch} ch"
+        return f"{rate} Hz mono {len(raw)} B"
+
+    def ff_mp3_503():
+        files = {"file": ("t.wav", (TD / "audio" / "jfk.wav").read_bytes(), "audio/wav")}
+        r = c.post("/v1/ffmpeg/convert-audio", files=files, data={"preset": "mp3-192"})
+        assert r.status_code == 503, r.status_code
+        return r.json().get("detail", "")[:45]
+
+    def ff_compress_503():
+        files = {"file": ("t.mp4", (TD / "video" / "test_5s.mp4").read_bytes(), "video/mp4")}
+        r = c.post("/v1/ffmpeg/compress", files=files, data={"preset": "web-720p"})
+        assert r.status_code == 503, r.status_code
+        return "honest 503"
+
     def err_missing_image():
         r = c.post("/v1/images/inpaint", json={"prompt": "x"})
         assert r.status_code == 400, r.status_code
@@ -257,8 +332,16 @@ def main():
     check("chat (vision)", chat)
     check("transcribe wav", transcribe)
     check("translations", translations)
+    check("ffmpeg presets", ff_presets)
+    check("ffmpeg info", ff_info)
+    check("ffmpeg image png->jpg", ff_image)
+    check("ffmpeg extract-audio", ff_extract)
+    check("ffmpeg trim 1s..3s", ff_trim)
+    check("ffmpeg audio -> aac", ff_audio_aac)
+    check("ffmpeg audio -> wav 16k", ff_audio_wav16k)
+    check("ffmpeg mp3 -> 503", ff_mp3_503)
+    check("ffmpeg compress -> 503", ff_compress_503)
     check("error: missing image -> 400", err_missing_image)
-    check("ffmpeg -> honest 503", err_ffmpeg)
     check("verify unknown -> 404", unknown_model)
 
     ok = sum(1 for _, o, _, _ in RESULTS if o)
