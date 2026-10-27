@@ -33,8 +33,21 @@ object SmolVlmEngine {
     private var isReady = false
     @Volatile var lastError: String = ""
 
+    /**
+     * True only when libsmolvlm_jni.so is actually bundled in the APK. The
+     * llama.cpp mtmd bridge is not part of every build, so the endpoints must
+     * answer 503 instead of crashing with UnsatisfiedLinkError.
+     */
+    @Volatile var nativeAvailable: Boolean = false
+        private set
+
     /** Initialize the llama.cpp context from GGUF + mmproj. */
     fun init(ctx: Context, dir: File): Boolean {
+        if (!nativeAvailable) {
+            lastError = "libsmolvlm_jni.so is not bundled in this build (llama.cpp mtmd)"
+            Log.w(TAG, lastError)
+            return false
+        }
         return try {
             modelDir = dir
             if (!dir.exists()) {
@@ -84,6 +97,10 @@ object SmolVlmEngine {
      * @return Caption text, or null on error (check lastError).
      */
     fun caption(image: Bitmap, prompt: String?, maxTokens: Int): String? {
+        if (!nativeAvailable) {
+            lastError = "libsmolvlm_jni.so is not bundled in this build (llama.cpp mtmd)"
+            return null
+        }
         if (!isReady || ctxPtr == 0L) {
             lastError = "engine not ready"
             return null
@@ -96,7 +113,9 @@ object SmolVlmEngine {
         } else image
         return try {
             llamaGenerateCaption(ctxPtr, resized, p, tokens)
-        } catch (e: Exception) {
+        } catch (e: Throwable) {
+            // UnsatisfiedLinkError is an Error, not an Exception: catching
+            // Throwable keeps the request alive and reports a real reason.
             lastError = "generate: ${e.message}"
             Log.e(TAG, lastError, e)
             null
@@ -112,7 +131,9 @@ object SmolVlmEngine {
         // Loaded by ApiServer when the VLM model is switched to
         try {
             System.loadLibrary("smolvlm_jni")
+            nativeAvailable = true
         } catch (e: UnsatisfiedLinkError) {
+            nativeAvailable = false
             Log.w(TAG, "libsmolvlm_jni.so not loaded (llama.cpp mtmd not bundled or NDK missing)")
         }
     }

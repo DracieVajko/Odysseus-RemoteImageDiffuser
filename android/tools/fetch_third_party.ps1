@@ -13,3 +13,11 @@ if (!(Test-Path (Join-Path $cpp "whisper.cpp\include\whisper.h"))) {
 } else {
   Write-Host "whisper.cpp already present, skipping."
 }
+# llama.cpp + libmtmd power caption/chat (:smolvlm module).
+$llama = Join-Path (Split-Path -Parent $PSScriptRoot) "third_party\llama.cpp"
+if (!(Test-Path (Join-Path $llama "include\llama.h"))) {
+  New-Item -ItemType Directory -Force -Path (Split-Path -Parent $llama) | Out-Null
+  git clone --depth 1 https://github.com/ggml-org/llama.cpp $llama
+} else {
+  Write-Host "llama.cpp already present, skipping."
+}

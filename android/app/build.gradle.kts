@@ -50,6 +50,13 @@ android {
         }
     }
 
+    sourceSets {
+        getByName("main") {
+            // Prebuilt ncnn shared lib (gitignored; see tools/fetch_ncnn.ps1).
+            jniLibs.srcDir("src/main/cpp/third_party/ncnn-jni")
+        }
+    }
+
     val ndkPresent = findNdkDir() != null
     if (ndkPresent) {
         externalNativeBuild {
@@ -97,4 +104,6 @@ dependencies {
     implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.8.3")
 
     implementation("com.microsoft.onnxruntime:onnxruntime-android:1.20.0")
+    // SmolVLM native runtime (llama.cpp + libmtmd) in its own CMake project
+    implementation(project(":smolvlm"))
 }

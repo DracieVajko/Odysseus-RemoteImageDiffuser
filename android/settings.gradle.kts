@@ -14,3 +14,4 @@ dependencyResolutionManagement {
 }
 rootProject.name = "odysseus-diffusion"
 include(":app")
+include(":smolvlm")

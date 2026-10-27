@@ -112,7 +112,7 @@ object ModelCatalog {
                 ModelFile("mmproj-SmolVLM-500M-Instruct-Q8_0.gguf",
                     "https://huggingface.co/ggml-org/SmolVLM-500M-Instruct-GGUF/resolve/main/mmproj-SmolVLM-500M-Instruct-Q8_0.gguf", 104),
             ),
-            note = "Mobile: caption/chat runs via PC in Auto/Remote mode.",
+            note = "On-device caption/chat needs the llama.cpp VLM runtime (libsmolvlm_jni), not bundled yet.",
         ),
         ModelAsset(
             id = "smolvlm2-500m-gguf", kind = "vlm", engine = "llama.cpp",
@@ -123,7 +123,7 @@ object ModelCatalog {
                 ModelFile("mmproj-SmolVLM2-500M-Video-Instruct-Q8_0.gguf",
                     "https://huggingface.co/ggml-org/SmolVLM2-500M-Video-Instruct-GGUF/resolve/main/mmproj-SmolVLM2-500M-Video-Instruct-Q8_0.gguf", 104),
             ),
-            note = "Mobile: caption/chat runs via PC in Auto/Remote mode.",
+            note = "On-device caption/chat needs the llama.cpp VLM runtime (libsmolvlm_jni), not bundled yet.",
         ),
     )
 
