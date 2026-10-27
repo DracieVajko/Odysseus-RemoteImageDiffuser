@@ -1391,6 +1391,7 @@ class ApiServer(
         var model = "whisper-large-v3-turbo-q5_0"
         var language = "sk"
         var autoSplit = true
+        var responseFormat = "json"
         call.receiveMultipart().forEachPart { part ->
             when (part) {
                 is PartData.FileItem -> if (part.name == "audio" || part.name == "file") {
@@ -1401,6 +1402,7 @@ class ApiServer(
                     "model" -> model = part.value
                     "language" -> language = part.value
                     "auto_split" -> autoSplit = part.value.lowercase() in setOf("true", "1", "yes", "on")
+                    "response_format" -> responseFormat = part.value.lowercase()
                 }
                 else -> {}
             }
@@ -1449,18 +1451,58 @@ switchTo("audio", effectiveModel) // 503 loading while switching image→audio
             listOf(pcmFloats)
         }
 
+        val wantSubs = responseFormat == "srt" || responseFormat == "vtt" ||
+            responseFormat == "verbose_json"
         val texts = mutableListOf<String>()
+        val cues = mutableListOf<Triple<Double, Double, String>>()
+        var chunkOffset = 0.0
         for ((idx, chunk) in chunks.withIndex()) {
             android.util.Log.i("ApiServer", "transcribing chunk ${idx + 1}/${chunks.size} (${chunk.size / 16000}s)")
-            val t = WhisperLib.transcribe(
-                modelFile = modelFile,
-                samples = chunk,
-                language = language.ifEmpty { "sk" },
-                translate = translation,
-            )
-            texts.add(t)
+            if (wantSubs) {
+                val raw = WhisperLib.transcribeSegments(
+                    modelFile = modelFile,
+                    samples = chunk,
+                    language = language.ifEmpty { "sk" },
+                    translate = translation,
+                    offsetSeconds = chunkOffset,
+                )
+                for (line in raw.lineSequence()) {
+                    val parts = line.split('\t')
+                    if (parts.size >= 3) {
+                        val a = parts[0].toDoubleOrNull() ?: continue
+                        val b = parts[1].toDoubleOrNull() ?: continue
+                        val t = parts.drop(2).joinToString("\t").trim()
+                        if (t.isNotEmpty()) cues.add(Triple(a, b, t))
+                    }
+                }
+                texts.add(cues.filter { it.first >= chunkOffset }
+                    .joinToString(" ") { it.third })
+            } else {
+                val t = WhisperLib.transcribe(
+                    modelFile = modelFile,
+                    samples = chunk,
+                    language = language.ifEmpty { "sk" },
+                    translate = translation,
+                )
+                texts.add(t)
+            }
+            chunkOffset += chunk.size / 16000.0
         }
-        val text = texts.joinToString(" ").trim()
+        val text = texts.joinToString(" ").trim().replace(Regex(" +"), " ")
+
+        if (responseFormat == "srt" || responseFormat == "vtt") {
+            val body = if (responseFormat == "srt") buildSrt(cues) else buildVtt(cues)
+            val ctx = appContext
+            val meta = if (ctx != null) OutputStore.store(
+                ctx, "text", ".$responseFormat", body.toByteArray(), "") else null
+            call.respondText(
+                body,
+                contentType = ContentType.parse("text/plain; charset=utf-8"),
+                status = HttpStatusCode.OK,
+            )
+            if (meta != null) android.util.Log.i("ApiServer", "subtitles -> ${meta["path"]}")
+            return
+        }
 
         call.respond(
             jsonOf(
@@ -1472,6 +1514,9 @@ switchTo("audio", effectiveModel) // 503 loading while switching image→audio
                 "duration" to (pcmFloats.size / 16000.0),
                 "auto_split" to (chunks.size > 1),
                 "chunks" to chunks.size,
+                "segments" to if (responseFormat == "verbose_json") cues.map {
+                    mapOf("start" to it.first, "end" to it.second, "text" to it.third)
+                } else emptyList<Map<String, Any>>(),
             )
         )
     }
@@ -1533,6 +1578,38 @@ switchTo("audio", effectiveModel) // 503 loading while switching image→audio
                 "low memory: ${avail} MB available, $what needs ~${neededMb} MB. " +
                     "Close other apps or use a smaller model.", -1, -1)
         }
+    }
+
+    private fun tsSrt(t: Double): String {
+        val ms = Math.round(t * 1000)
+        val h = ms / 3_600_000
+        val m = (ms % 3_600_000) / 60_000
+        val s = (ms % 60_000) / 1000
+        val r = ms % 1000
+        return String.format("%02d:%02d:%02d,%03d", h, m, s, r)
+    }
+
+    private fun tsVtt(t: Double): String = tsSrt(t).replace(',', '.')
+
+    private fun buildSrt(cues: List<Triple<Double, Double, String>>): String {
+        if (cues.isEmpty()) return ""
+        val sb = StringBuilder()
+        cues.forEachIndexed { i, c ->
+            sb.append(i + 1).append('\n')
+            sb.append(tsSrt(c.first)).append(" --> ").append(tsSrt(c.second)).append('\n')
+            sb.append(c.third).append("\n\n")
+        }
+        return sb.toString()
+    }
+
+    private fun buildVtt(cues: List<Triple<Double, Double, String>>): String {
+        if (cues.isEmpty()) return "WEBVTT\n"
+        val sb = StringBuilder("WEBVTT\n\n")
+        cues.forEach { c ->
+            sb.append(tsVtt(c.first)).append(" --> ").append(tsVtt(c.second)).append('\n')
+            sb.append(c.third).append("\n\n")
+        }
+        return sb.toString()
     }
 
     private fun requireModelReady(assetId: String) {

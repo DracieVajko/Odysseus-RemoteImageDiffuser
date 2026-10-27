@@ -79,6 +79,39 @@ object WhisperLib {
         }
     }
 
+    /**
+     * Transcribe and return subtitle cues as "start<TAB>end<TAB>text" lines.
+     * @param offsetSeconds global offset of this chunk (long files are split).
+     */
+    fun transcribeSegments(
+        modelFile: File,
+        samples: FloatArray,
+        language: String = "sk",
+        translate: Boolean = false,
+        offsetSeconds: Double = 0.0,
+    ): String {
+        if (!isNativeLoaded) return ""
+        if (!modelFile.exists() || samples.isEmpty()) return ""
+        synchronized(lock) {
+            ensureContext(modelFile)
+            if (cachedCtx == 0L) return ""
+            val threads = Runtime.getRuntime().availableProcessors().coerceIn(1, 8)
+            val t0 = System.currentTimeMillis()
+            return try {
+                val out = fullTranscribeSegments(
+                    cachedCtx, threads, samples, language, translate,
+                    (offsetSeconds * 1000).toLong(),
+                )
+                Log.i(TAG, "segments ${samples.size / 16000.0}s in ${System.currentTimeMillis() - t0} ms " +
+                        "(${out.lines().count { it.isNotBlank() }} cues)")
+                out
+            } catch (e: Exception) {
+                Log.e(TAG, "segment inference failed: ${e.message}", e)
+                ""
+            }
+        }
+    }
+
 /** Load the model into the cache if not already loaded (or a different one). Call under the lock. */
     private fun ensureContext(modelFile: File) {
         val path = modelFile.absolutePath
@@ -116,5 +149,14 @@ object WhisperLib {
         samples: FloatArray,
         language: String,
         translate: Boolean,
+    ): String
+
+    private external fun fullTranscribeSegments(
+        contextPtr: Long,
+        numThreads: Int,
+        samples: FloatArray,
+        language: String,
+        translate: Boolean,
+        offsetMs: Long,
     ): String
 }
