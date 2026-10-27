@@ -22,7 +22,7 @@ import uuid
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-from fastapi import FastAPI, File, Form, UploadFile
+from fastapi import FastAPI, File, Form, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from pydantic import BaseModel
@@ -1639,7 +1639,7 @@ def models_cancel(req: InstallRequest):
 
 
 @app.get("/v1/settings")
-def settings_info():
+def settings_info(request: Request):
     """Runtime info for the WebUI Settings tab (read-only, no secrets)."""
     import shutil as _sh
     torch_ok = False
@@ -1650,10 +1650,24 @@ def settings_info():
         cuda = torch.cuda.is_available()
     except Exception:
         pass
+    onnx_ok = False
+    try:
+        import onnxruntime  # noqa: F401
+        onnx_ok = True
+    except Exception:
+        pass
+    whisper_ok = False
+    try:
+        import faster_whisper  # noqa: F401
+        whisper_ok = True
+    except Exception:
+        pass
     return {
         "version": "unified-0.1.0",
-        "port": 8101,
+        # The port the request actually arrived on, not a hardcoded default.
+        "port": request.url.port or 8101,
         "whisper_url": WHISPER_SERVICE_URL,
+        "whisper_mode": "local (faster-whisper)" if whisper_ok else "remote",
         "models_dir": str(HERE / "models"),
         "output_dir": str(HERE / "output"),
         "default_image_model": _image_registry().get("default_image_model", ""),
@@ -1661,6 +1675,8 @@ def settings_info():
         "engines": {
             "torch": torch_ok,
             "cuda": cuda,
+            "onnxruntime": onnx_ok,
+            "whisper_native": whisper_ok,
             "ffmpeg": _sh.which("ffmpeg") or "",
             "ffprobe": _sh.which("ffprobe") or "",
             "ytdlp": _sh.which("yt-dlp") or "",

@@ -959,7 +959,7 @@ async function loadSettings(){
     document.getElementById('settingsBox').textContent =
       'version: '+j.version+'\n'
       + 'port: '+j.port+'\n'
-      + 'whisper: '+j.whisper_url+'\n'
+      + 'whisper: '+(j.whisper_mode||'?')+(j.whisper_url?' · remote url '+j.whisper_url:'')+'\n'
       + 'models dir: '+j.models_dir+'\n'
       + 'output dir: '+(j.output_dir||'-')+'\n'
       + 'default image model: '+j.default_image_model+'\n'

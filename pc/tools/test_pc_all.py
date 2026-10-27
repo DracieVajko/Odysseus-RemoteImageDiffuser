@@ -47,8 +47,10 @@ ONLY = ""
 
 
 def check(name, fn):
-    if ONLY and ONLY not in name.lower():
-        return True
+    if ONLY:
+        keys = [k.strip() for k in ONLY.split(",") if k.strip()]
+        if not any(k in name.lower() for k in keys):
+            return True
     t0 = time.time()
     try:
         detail = fn()
@@ -90,7 +92,8 @@ def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--base", default=os.environ.get("PRISM_BASE", BASE))
     ap.add_argument("--skip-files", action="store_true", help="skip ffmpeg/audio work")
-    ap.add_argument("--only", default="", help="run only checks whose name contains this")
+    ap.add_argument("--only", default="",
+                    help="comma-separated substrings; only matching checks run")
     args = ap.parse_args()
     global ONLY
     ONLY = args.only.strip().lower()
