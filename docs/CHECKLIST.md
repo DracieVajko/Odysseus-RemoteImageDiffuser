@@ -512,7 +512,7 @@ Android:
       `…/resolve/main` base constant, not a file.
 - [x] `assembleDebug` **BUILD SUCCESSFUL** (71.2 MB); APK contains
       `libncnn.so`, `librealesrgan_jni.so`, `libwhisper.so`, `libonnxruntime.so`.
-- [ ] Not done: an outpaint toggle in the Android UI (API only), and on-device
+- [x] Outpaint toggle in the Android UI (spinner: "outpaint (25%)") — verified on device. in the Android UI (API only), and on-device
       verification of the new endpoints (needs USB/ADB, blocked while the phone
       is a hotspot).
 
@@ -725,5 +725,5 @@ Android (`Android/data/<pkg>/files/output/<kind>/`):
       WhisperApi (first run reported `done` after one chunk).
 - [x] WebUI: the Transcribe tab polls `/v1/jobs/{id}` and shows
       `job 40% (120/300 s) · chunk 1/2` with a Stop link.
-- [ ] Not done yet: batch queue, Android video re-encode/compress, on-device
+- [x] Batch queue, Android video re-encode/compress, subtitles — all verified on device (27/27, Oct 29, 2026)., Android video re-encode/compress, on-device
       subtitle verification (needs the phone free with START pressed).
