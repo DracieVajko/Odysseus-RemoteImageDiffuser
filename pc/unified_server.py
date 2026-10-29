@@ -1658,7 +1658,7 @@ async def text_process(
     instruction: str = Form(default="cleanup"),
     target_lang: str = Form(default="sk"),
 ):
-    \"\"\"Post-process text with Gemma4 (cleanup, translate, summarize, rewrite).\"\"\"
+    """Post-process text with Gemma4 (cleanup, translate, summarize, rewrite)."""
     if not text.strip():
         return JSONResponse(status_code=400, content={"error": "missing text"})
     try:
