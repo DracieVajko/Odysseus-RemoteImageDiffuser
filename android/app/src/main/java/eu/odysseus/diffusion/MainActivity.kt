@@ -76,7 +76,10 @@ class MainActivity : AppCompatActivity() {
     private lateinit var spinnerModel: android.widget.Spinner
     private lateinit var spinnerLang: android.widget.Spinner
     private lateinit var btnTranscribe: MaterialButton
-    private lateinit var transcribeOut: TextView
+    private lateinit var transcribeOut: android.widget.EditText
+    private lateinit var transcribeProgress: android.widget.ProgressBar
+    private lateinit var transcribeStatus: TextView
+    private lateinit var btnClearTranscript: MaterialButton
     private lateinit var btnPickImage: MaterialButton
     private lateinit var imageFileLabel: TextView
     private lateinit var btnUpscale: MaterialButton
@@ -193,6 +196,9 @@ class MainActivity : AppCompatActivity() {
         spinnerLang = findViewById(R.id.spinnerLang)
         btnTranscribe = findViewById(R.id.btnTranscribe)
         transcribeOut = findViewById(R.id.transcribeOut)
+        transcribeProgress = findViewById(R.id.transcribeProgress)
+        transcribeStatus = findViewById(R.id.transcribeStatus)
+        btnClearTranscript = findViewById(R.id.btnClearTranscript)
         btnPickImage = findViewById(R.id.btnPickImage)
         imageFileLabel = findViewById(R.id.imageFileLabel)
         btnUpscale = findViewById(R.id.btnUpscale)
@@ -866,7 +872,8 @@ class MainActivity : AppCompatActivity() {
         spinnerModel.adapter = android.widget.ArrayAdapter(
             this, android.R.layout.simple_spinner_dropdown_item, audio.map { it.id })
         spinnerLang.adapter = android.widget.ArrayAdapter(
-            this, android.R.layout.simple_spinner_dropdown_item, listOf("auto", "sk", "cs", "en"))
+            this, android.R.layout.simple_spinner_dropdown_item,
+            listOf("sk", "cs", "en", "de", "fr", "es", "it", "pl", "ru", "uk", "hu", "auto"))
 
         genResolution.adapter = android.widget.ArrayAdapter(
             this, android.R.layout.simple_spinner_dropdown_item,
@@ -973,6 +980,11 @@ class MainActivity : AppCompatActivity() {
 
         btnGenerate.setOnClickListener { runGenerate() }
         btnTranscribe.setOnClickListener { runTranscribe() }
+        btnClearTranscript.setOnClickListener {
+            transcribeOut.setText("")
+            transcribeStatus.text = ""
+            btnSaveTranscript.visibility = android.view.View.GONE
+        }
         btnUpscale.setOnClickListener { runUpscale() }
         btnCaption.setOnClickListener { runCaption() }
     }
@@ -1021,11 +1033,14 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun runTranscribe() {
-        val uri = audioUri ?: run { toast("Pick an audio file first"); return }
+        val uri = audioUri ?: run { toast("Pick or record an audio file first"); return }
         val model = spinnerModel.selectedItem?.toString() ?: ""
-        val lang = spinnerLang.selectedItem?.toString() ?: "auto"
-        transcribeOut.text = "transcribing…"
+        val lang = spinnerLang.selectedItem?.toString() ?: "sk"
+        transcribeOut.setText("")
+        transcribeStatus.text = "transcribing…"
+        transcribeProgress.visibility = android.view.View.VISIBLE
         btnTranscribe.isEnabled = false
+        btnSaveTranscript.visibility = android.view.View.GONE
         Thread {
             val bytes = if (uri.scheme == "file") {
                 java.io.File(uri.path!!).readBytes()
@@ -1033,10 +1048,15 @@ class MainActivity : AppCompatActivity() {
                 contentResolver.openInputStream(uri)?.use { it.readBytes() }
             }
             if (bytes == null) {
-                handler.post { btnTranscribe.isEnabled = true; transcribeOut.text = "error: cannot read file" }
+                handler.post {
+                    btnTranscribe.isEnabled = true
+                    transcribeProgress.visibility = android.view.View.GONE
+                    transcribeStatus.text = "error: cannot read file"
+                }
                 return@Thread
             }
             val name = uri.lastPathSegment ?: "audio.wav"
+            handler.post { transcribeStatus.text = "uploading ${bytes.size / 1024} KB…" }
             val resp = httpMultipart(
                 "http://127.0.0.1:8101/v1/audio/transcriptions",
                 mapOf("model" to model, "language" to lang),
@@ -1044,14 +1064,23 @@ class MainActivity : AppCompatActivity() {
             )
             handler.post {
                 btnTranscribe.isEnabled = true
-                if (resp == null) { transcribeOut.text = "error: no response"; return@post }
+                transcribeProgress.visibility = android.view.View.GONE
+                if (resp == null) {
+                    transcribeStatus.text = "error: no response"
+                    return@post
+                }
                 try {
                     val j = org.json.JSONObject(resp)
                     val text = j.optString("text", "")
-                    transcribeOut.text = if (text.isNotEmpty()) text
-                    else ("error: " + j.optString("error", resp))
+                    if (text.isNotEmpty()) {
+                        transcribeOut.setText(text)
+                        transcribeStatus.text = "done: ${text.length} chars, ${j.optInt("chunks", 1)} chunk(s)"
+                        btnSaveTranscript.visibility = android.view.View.VISIBLE
+                    } else {
+                        transcribeStatus.text = "error: " + j.optString("error", resp)
+                    }
                 } catch (e: Exception) {
-                    transcribeOut.text = "error: ${e.message}"
+                    transcribeStatus.text = "error: ${e.message}"
                 }
             }
         }.start()
