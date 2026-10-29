@@ -104,6 +104,15 @@ object ModelCatalog {
 /** VLM: runtime is llama.cpp (libmtmd) — not bundled yet; experimental. */
     private val vlm: List<ModelAsset> = listOf(
         ModelAsset(
+            id = "gemma4-e2b-gguf", kind = "vlm", engine = "llama.cpp",
+            label = "Gemma4 E2B Instruct Q4_0 (text) - 3.0 GB",
+            files = listOf(
+                ModelFile("gemma-4-E2B_q4_0-it.gguf",
+                    "https://huggingface.co/google/gemma-4-E2B-it-qat-q4_0-gguf/resolve/main/gemma-4-E2B_q4_0-it.gguf", 3042),
+            ),
+            note = "Gemma4 E2B for text post-processing (cleanup, translate, rewrite). Text-only, no vision.",
+        ),
+        ModelAsset(
             id = "smolvlm-500m-gguf", kind = "vlm", engine = "llama.cpp",
             label = "SmolVLM 500M Instruct Q8_0 + vision mmproj — 520 MB",
             files = listOf(
