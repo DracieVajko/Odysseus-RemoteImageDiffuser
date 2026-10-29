@@ -75,6 +75,8 @@ class MainActivity : AppCompatActivity() {
     private lateinit var audioFileLabel: TextView
     private lateinit var spinnerModel: android.widget.Spinner
     private lateinit var spinnerLang: android.widget.Spinner
+    private lateinit var switchGemma: androidx.appcompat.widget.SwitchCompat
+    private lateinit var spinnerGemmaMode: android.widget.Spinner
     private lateinit var btnTranscribe: MaterialButton
     private lateinit var transcribeOut: android.widget.EditText
     private lateinit var transcribeProgress: android.widget.ProgressBar
@@ -194,6 +196,8 @@ class MainActivity : AppCompatActivity() {
         audioFileLabel = findViewById(R.id.audioFileLabel)
         spinnerModel = findViewById(R.id.spinnerModel)
         spinnerLang = findViewById(R.id.spinnerLang)
+        switchGemma = findViewById(R.id.switchGemma)
+        spinnerGemmaMode = findViewById(R.id.spinnerGemmaMode)
         btnTranscribe = findViewById(R.id.btnTranscribe)
         transcribeOut = findViewById(R.id.transcribeOut)
         transcribeProgress = findViewById(R.id.transcribeProgress)
@@ -874,6 +878,9 @@ class MainActivity : AppCompatActivity() {
         spinnerLang.adapter = android.widget.ArrayAdapter(
             this, android.R.layout.simple_spinner_dropdown_item,
             listOf("sk", "cs", "en", "de", "fr", "es", "it", "pl", "ru", "uk", "hu", "auto"))
+        spinnerGemmaMode.adapter = android.widget.ArrayAdapter(
+            this, android.R.layout.simple_spinner_dropdown_item,
+            listOf("cleanup", "translate", "summarize", "rewrite"))
 
         genResolution.adapter = android.widget.ArrayAdapter(
             this, android.R.layout.simple_spinner_dropdown_item,
@@ -1073,8 +1080,41 @@ class MainActivity : AppCompatActivity() {
                     val j = org.json.JSONObject(resp)
                     val text = j.optString("text", "")
                     if (text.isNotEmpty()) {
-                        transcribeOut.setText(text)
-                        transcribeStatus.text = "done: ${text.length} chars, ${j.optInt("chunks", 1)} chunk(s)"
+                        var finalText = text
+                        if (switchGemma.isChecked) {
+                            transcribeStatus.text = "post-processing with Gemma4..."
+                            transcribeProgress.visibility = android.view.View.VISIBLE
+                            try {
+                                val modelPath = findGemmaModelPath()
+                                if (modelPath != null) {
+                                    val handle = GemmaLib.loadTextModel(modelPath)
+                                    if (handle != 0L) {
+                                        val mode = spinnerGemmaMode.selectedItem?.toString() ?: "cleanup"
+                                        val targetLang = spinnerLang.selectedItem?.toString() ?: "sk"
+                                        val prompt = when (mode) {
+                                            "cleanup" -> "Fix spelling, grammar, and punctuation in this transcription. Keep the original language. Return only the corrected text:\\n\\n$text"
+                                            "translate" -> "Translate the following text to ${langName(targetLang)}. Return only the translation:\\n\\n$text"
+                                            "summarize" -> "Summarize the following text in a few sentences. Return only the summary:\\n\\n$text"
+                                            "rewrite" -> "Rewrite the following text to be clearer and more readable. Return only the rewritten text:\\n\\n$text"
+                                            else -> text
+                                        }
+                                        val result = GemmaLib.generateText(handle, prompt, 2048)
+                                        if (result != null && result.isNotBlank()) {
+                                            finalText = result.trim()
+                                        }
+                                        GemmaLib.releaseTextModel(handle)
+                                    }
+                                } else {
+                                    transcribeStatus.text = "Gemma4 model not downloaded"
+                                }
+                            } catch (e: Exception) {
+                                transcribeStatus.text = "Gemma4 error: ${e.message}"
+                            }
+                            transcribeProgress.visibility = android.view.View.GONE
+                        }
+                        transcribeOut.setText(finalText)
+                        transcribeStatus.text = "done: ${finalText.length} chars, ${j.optInt("chunks", 1)} chunk(s)" +
+                            if (switchGemma.isChecked) " (Gemma4)" else ""
                         btnSaveTranscript.visibility = android.view.View.VISIBLE
                     } else {
                         transcribeStatus.text = "error: " + j.optString("error", resp)
@@ -1479,6 +1519,18 @@ class MainActivity : AppCompatActivity() {
 
     private fun renderLog() {
         activityLog.text = if (logLines.isEmpty()) "ready" else logLines.joinToString("\n")
+    }
+
+    private fun findGemmaModelPath(): String? {
+        val modelsDir = java.io.File(filesDir, "models/gemma4-e2b-gguf")
+        val gguf = modelsDir.listFiles()?.firstOrNull { it.name.endsWith(".gguf") }
+        return gguf?.absolutePath
+    }
+
+    private fun langName(code: String): String = when (code) {
+        "sk" -> "Slovak"; "cs" -> "Czech"; "en" -> "English"; "de" -> "German"
+        "fr" -> "French"; "es" -> "Spanish"; "it" -> "Italian"; "pl" -> "Polish"
+        "ru" -> "Russian"; "uk" -> "Ukrainian"; "hu" -> "Hungarian"; else -> code
     }
 
     private fun toast(m: String) = Toast.makeText(this, m, Toast.LENGTH_SHORT).show()
