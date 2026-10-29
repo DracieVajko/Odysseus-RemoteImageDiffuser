@@ -305,8 +305,12 @@ def main():
         # reports 503 if the EGL/GL pipeline is unavailable on this device.
         assert r.status_code in (200, 503), r.status_code
         if r.status_code == 200:
-            assert r.content[:4] in (b"\x00\x00\x00\x18", b"\x00\x00\x00\x1c", b"\x00\x00\x00 ftyp", b"\x00\x00\x00\x20")
-            return f"{len(r.content)} B (re-encoded)"
+            j = r.json()
+            import base64 as _b64
+            raw = _b64.b64decode(j.get("file") or j.get("data") or "")
+            assert len(raw) > 1000, len(raw)
+            assert raw[:4] in (b"\x00\x00\x00\x18", b"\x00\x00\x00\x1c", b"\x00\x00\x00 ", b"\x00\x00\x00\x20"), raw[:4]
+            return f"{len(raw)} B (re-encoded)"
         return "honest 503 (EGL unavailable)"
 
     def err_missing_image():
