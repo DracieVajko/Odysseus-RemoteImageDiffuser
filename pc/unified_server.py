@@ -1487,6 +1487,8 @@ async def transcriptions(
     response_format: str = Form(default="json"),
     auto_split: str = Form(default="true"),
     request_id: str = Form(default=""),
+    post_process: str = Form(default=""),
+    post_process_lang: str = Form(default=""),
 ):
     # Called directly (translations) FastAPI defaults are still Form objects.
     if not isinstance(request_id, str):
@@ -1579,6 +1581,17 @@ async def transcriptions(
                 text, lang = "[unified stub — start the WhisperApi service or install faster-whisper]", language
                 segments = []
                 engine = "stub"
+        # Optional Gemma4 post-processing (cleanup, translate, summarize, rewrite)
+        if post_process and text and not text.startswith("[unified stub"):
+            try:
+                from unified.gemma_postprocess import process as gemma_process, init as gemma_init
+                if gemma_init():
+                    pp_lang = post_process_lang or lang or "sk"
+                    text = gemma_process(text, instruction=post_process, target_lang=pp_lang)
+                    engine = engine + "+gemma4"
+                    logger.info("Gemma4 post-processing applied: %s", post_process)
+            except Exception as e:
+                logger.warning("Gemma4 post-processing failed: %s", str(e)[:200])
         _job_finish(rid, "done")
         fmt = (response_format or "json").strip().lower()
         if fmt in ("srt", "vtt"):
@@ -1637,6 +1650,31 @@ async def translations(
 @app.post("/transcribe")
 async def transcribe_alias(file: UploadFile = File(...), language: str = Form(default=None)):
     return await transcriptions(file=file, language=language)
+
+
+@app.post("/v1/text/process")
+async def text_process(
+    text: str = Form(default=""),
+    instruction: str = Form(default="cleanup"),
+    target_lang: str = Form(default="sk"),
+):
+    \"\"\"Post-process text with Gemma4 (cleanup, translate, summarize, rewrite).\"\"\"
+    if not text.strip():
+        return JSONResponse(status_code=400, content={"error": "missing text"})
+    try:
+        from unified.gemma_postprocess import process as gemma_process, init as gemma_init, is_installed
+        if not is_installed():
+            return JSONResponse(status_code=503, content={
+                "error": "Gemma4 not installed",
+                "detail": "Download google/gemma-4-E2B-it to pc/models/gemma-4-E2B-it/",
+            })
+        if not gemma_init():
+            return JSONResponse(status_code=503, content={"error": "Gemma4 failed to load"})
+        result = gemma_process(text, instruction=instruction, target_lang=target_lang)
+        return {"text": result, "original": text, "instruction": instruction,
+                "target_lang": target_lang, "engine": "gemma4-E2B"}
+    except Exception as e:
+        return JSONResponse(status_code=500, content={"error": str(e)[:200]})
 
 
 # ---------- webui ----------
