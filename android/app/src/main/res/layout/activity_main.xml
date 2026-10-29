@@ -510,14 +510,32 @@
                         android:orientation="vertical"
                         android:padding="16dp">
 
-                        <com.google.android.material.button.MaterialButton
-                            android:id="@+id/btnPickAudio"
-                            style="@style/Widget.MaterialComponents.Button.OutlinedButton"
+                        <LinearLayout
                             android:layout_width="match_parent"
                             android:layout_height="wrap_content"
-                            android:text="@string/btn_open_audio"
-                            app:cornerRadius="8dp"
-                            app:strokeColor="@color/prism_border" />
+                            android:orientation="horizontal">
+
+                            <com.google.android.material.button.MaterialButton
+                                android:id="@+id/btnRecordAudio"
+                                style="@style/Widget.MaterialComponents.Button.OutlinedButton"
+                                android:layout_width="0dp"
+                                android:layout_height="wrap_content"
+                                android:layout_weight="1"
+                                android:text="Record"
+                                app:cornerRadius="8dp"
+                                app:strokeColor="@color/prism_border" />
+
+                            <com.google.android.material.button.MaterialButton
+                                android:id="@+id/btnPickAudio"
+                                style="@style/Widget.MaterialComponents.Button.OutlinedButton"
+                                android:layout_width="0dp"
+                                android:layout_height="wrap_content"
+                                android:layout_marginStart="8dp"
+                                android:layout_weight="1"
+                                android:text="@string/btn_open_audio"
+                                app:cornerRadius="8dp"
+                                app:strokeColor="@color/prism_border" />
+                        </LinearLayout>
 
                         <TextView
                             android:id="@+id/audioFileLabel"

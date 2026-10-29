@@ -71,6 +71,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var genImage: android.widget.ImageView
     private lateinit var btnGenerate: MaterialButton
     private lateinit var btnPickAudio: MaterialButton
+    private lateinit var btnRecordAudio: MaterialButton
     private lateinit var audioFileLabel: TextView
     private lateinit var spinnerModel: android.widget.Spinner
     private lateinit var spinnerLang: android.widget.Spinner
@@ -186,6 +187,7 @@ class MainActivity : AppCompatActivity() {
         genImage = findViewById(R.id.genImage)
         btnGenerate = findViewById(R.id.btnGenerate)
         btnPickAudio = findViewById(R.id.btnPickAudio)
+        btnRecordAudio = findViewById(R.id.btnRecordAudio)
         audioFileLabel = findViewById(R.id.audioFileLabel)
         spinnerModel = findViewById(R.id.spinnerModel)
         spinnerLang = findViewById(R.id.spinnerLang)
@@ -377,8 +379,20 @@ class MainActivity : AppCompatActivity() {
     }
 
     override fun onDestroy() {
+        if (isRecording) { try { mediaRecorder?.stop() } catch (_: Exception) {} }
+        mediaRecorder?.release()
+        mediaRecorder = null
         handler.removeCallbacks(ticker)
         super.onDestroy()
+    }
+
+    override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults)
+        if (requestCode == 2001 && grantResults.isNotEmpty() && grantResults[0] == android.content.pm.PackageManager.PERMISSION_GRANTED) {
+            startRecording()
+        } else if (requestCode == 2001) {
+            toast("Microphone permission denied")
+        }
     }
 
     // ---------- server ----------
@@ -784,6 +798,9 @@ class MainActivity : AppCompatActivity() {
 
     private var audioUri: android.net.Uri? = null
     private var imageUri: android.net.Uri? = null
+    private var mediaRecorder: android.media.MediaRecorder? = null
+    private var isRecording = false
+    private var recordingFile: java.io.File? = null
 
     private val pickAudio = registerForActivityResult(
         androidx.activity.result.contract.ActivityResultContracts.StartActivityForResult()
@@ -950,6 +967,7 @@ class MainActivity : AppCompatActivity() {
         settingsReady = true
 
         btnPickAudio.setOnClickListener { openDocument("*/*", "Recordings", pickAudio) }
+        btnRecordAudio.setOnClickListener { toggleRecording() }
         btnPickImageCaption.setOnClickListener { openDocument("image/*", "Pictures", pickImage) }
         btnPickImage.setOnClickListener { openDocument("image/*", "Pictures", pickImage) }
 
@@ -1009,7 +1027,11 @@ class MainActivity : AppCompatActivity() {
         transcribeOut.text = "transcribing…"
         btnTranscribe.isEnabled = false
         Thread {
-            val bytes = contentResolver.openInputStream(uri)?.use { it.readBytes() }
+            val bytes = if (uri.scheme == "file") {
+                java.io.File(uri.path!!).readBytes()
+            } else {
+                contentResolver.openInputStream(uri)?.use { it.readBytes() }
+            }
             if (bytes == null) {
                 handler.post { btnTranscribe.isEnabled = true; transcribeOut.text = "error: cannot read file" }
                 return@Thread
@@ -1033,6 +1055,70 @@ class MainActivity : AppCompatActivity() {
                 }
             }
         }.start()
+    }
+
+    private fun toggleRecording() {
+        if (isRecording) {
+            stopRecording()
+        } else {
+            startRecording()
+        }
+    }
+
+    private fun startRecording() {
+        if (checkSelfPermission(android.Manifest.permission.RECORD_AUDIO)
+            != android.content.pm.PackageManager.PERMISSION_GRANTED) {
+            requestPermissions(arrayOf(android.Manifest.permission.RECORD_AUDIO), 2001)
+            return
+        }
+        try {
+            val dir = cacheDir
+            recordingFile = java.io.File(dir, "recording_${System.currentTimeMillis()}.m4a")
+            mediaRecorder = if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.S) {
+                android.media.MediaRecorder(this)
+            } else {
+                @Suppress("DEPRECATION")
+                android.media.MediaRecorder()
+            }
+            mediaRecorder!!.apply {
+                setAudioSource(android.media.MediaRecorder.AudioSource.MIC)
+                setOutputFormat(android.media.MediaRecorder.OutputFormat.MPEG_4)
+                setAudioEncoder(android.media.MediaRecorder.AudioEncoder.AAC)
+                setAudioEncodingBitRate(128000)
+                setAudioSamplingRate(44100)
+                setOutputFile(recordingFile!!.absolutePath)
+                prepare()
+                start()
+            }
+            isRecording = true
+            btnRecordAudio.text = "Stop"
+            audioFileLabel.text = "recording..."
+            toast("Recording started")
+        } catch (e: Exception) {
+            toast("record failed: ${e.message}")
+            mediaRecorder?.release()
+            mediaRecorder = null
+        }
+    }
+
+    private fun stopRecording() {
+        try {
+            mediaRecorder?.apply { stop(); release() }
+        } catch (e: Exception) {
+            toast("stop failed: ${e.message}")
+        }
+        mediaRecorder = null
+        isRecording = false
+        btnRecordAudio.text = "Record"
+        recordingFile?.let { f ->
+            if (f.exists() && f.length() > 0) {
+                audioUri = android.net.Uri.fromFile(f)
+                audioFileLabel.text = "recorded: ${f.name} (${f.length() / 1024} KB)"
+                toast("Recording saved, ready to transcribe")
+            } else {
+                toast("recording empty")
+            }
+        }
     }
 
     private fun runUpscale() {
