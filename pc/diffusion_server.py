@@ -56,8 +56,8 @@ def _setup_logging(level: str, log_file: str):
     for name in ("uvicorn", "uvicorn.error", "uvicorn.access"):
         try:
             logging.getLogger(name).setLevel(lvl)
-        except Exception:
-            pass
+        except Exception as _e:
+            logger.debug('suppressed: %s', _e)
     if (log_file or "").strip():
         try:
             p = Path(log_file)
@@ -273,8 +273,8 @@ def _server_busy() -> bool:
         for item in _PROGRESS.values():
             if item.get("status") == "running" and now - item.get("updated_at", 0) < 180:
                 return True
-    except Exception:
-        pass
+    except Exception as _e:
+        logger.debug('suppressed: %s', _e)
     return False
 
 
@@ -436,8 +436,8 @@ def _log_nsfw_filter(result, where: str):
             n = sum(1 for f in flagged if f)
             logger.warning("Safety checker BLACKED %d/%d image(s) in %s (nsfw_content_detected=%s)",
                            n, len(flagged), where, list(flagged))
-    except Exception:
-        pass
+    except Exception as _e:
+        logger.debug('suppressed: %s', _e)
 
 
 def _fix_meta_tensors(pipe, dtype):
@@ -466,13 +466,13 @@ def _target_device() -> str:
     try:
         if torch.cuda.is_available():
             return "cuda"
-    except Exception:
-        pass
+    except Exception as _e:
+        logger.debug('suppressed: %s', _e)
     try:
         if hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
             return "mps"
-    except Exception:
-        pass
+    except Exception as _e:
+        logger.debug('suppressed: %s', _e)
     return "cpu"
 
 
@@ -540,21 +540,21 @@ def _ensure_transformers_compat():
         try:
             if not hasattr(_tf, "CLIPFeatureExtractor"):
                 _tf.CLIPFeatureExtractor = _target
-        except Exception:
-            pass
+        except Exception as _e:
+            logger.debug('suppressed: %s', _e)
         try:
             _objs = getattr(_tf, "_objects", None)
             if isinstance(_objs, dict) and "CLIPFeatureExtractor" not in _objs:
                 _objs["CLIPFeatureExtractor"] = _target
-        except Exception:
-            pass
+        except Exception as _e:
+            logger.debug('suppressed: %s', _e)
         try:
             _c2m = getattr(_tf, "_class_to_module", None)
             if isinstance(_c2m, dict) and "CLIPFeatureExtractor" not in _c2m:
                 _c2m["CLIPFeatureExtractor"] = _c2m.get(
                     "CLIPImageProcessor", "models.clip.image_processing_clip")
-        except Exception:
-            pass
+        except Exception as _e:
+            logger.debug('suppressed: %s', _e)
         # If diffusers holds another transformers module object (observed:
         # importing diffusers can swap sys.modules['transformers']), patch
         # every loaded copy.
@@ -571,8 +571,8 @@ def _ensure_transformers_compat():
                             _o2["CLIPFeatureExtractor"] = getattr(_mod, "CLIPImageProcessor")
                 except Exception:
                     continue
-        except Exception:
-            pass
+        except Exception as _e:
+            logger.debug('suppressed: %s', _e)
     except Exception as _shim_exc:
         logger.warning("transformers compat shim failed: %s", _shim_exc)
 
@@ -620,15 +620,15 @@ def _detect_hardware() -> dict:
             st.dwLength = ctypes.sizeof(_MS)
             ctypes.windll.kernel32.GlobalMemoryStatusEx(ctypes.byref(st))
             info["ram_mib"] = int(st.ullTotalPhys // 1048576)
-        except Exception:
-            pass
+        except Exception as _e:
+            logger.debug('suppressed: %s', _e)
     try:
         if torch.cuda.is_available():
             _free, total = torch.cuda.mem_get_info()
             info["cuda"] = True
             info["vram_mib"] = int(total // 1048576)
-    except Exception:
-        pass
+    except Exception as _e:
+        logger.debug('suppressed: %s', _e)
     vram = info["vram_mib"]
     if not info["cuda"]:
         info["preset"] = "cpu"
@@ -692,14 +692,14 @@ def _discover_models() -> dict:
             try:
                 if target.resolve() in known:
                     continue
-            except Exception:
-                pass
+            except Exception as _e:
+                logger.debug('suppressed: %s', _e)
             size_gb = 0.0
             try:
                 size_gb = sum(f.stat().st_size for f in sub.rglob("*.safetensors")
                               if f.is_file()) / 1e9
-            except Exception:
-                pass
+            except Exception as _e:
+                logger.debug('suppressed: %s', _e)
             sdxl = size_gb >= 5.0
             mid = sub.name if sub.name not in _REGISTRY else f"{sub.name}-discovered"
             found[mid] = {
@@ -771,8 +771,8 @@ def _init_lazy():
     try:
         if _args is not None:
             _args._registry_negative = str(data.get("negative_prompt") or "")
-    except Exception:
-        pass
+    except Exception as _e:
+        logger.debug('suppressed: %s', _e)
     explicit_default = ""
     if _args is not None:
         explicit_default = (getattr(_args, "default_model", "") or "").strip()
@@ -908,8 +908,8 @@ def _ram_free_mib() -> int:
     try:
         import psutil  # type: ignore
         return int(psutil.virtual_memory().available // 1048576)
-    except Exception:
-        pass
+    except Exception as _e:
+        logger.debug('suppressed: %s', _e)
     try:
         import ctypes
 
@@ -923,8 +923,8 @@ def _ram_free_mib() -> int:
         st.dwLength = ctypes.sizeof(_MF)
         ctypes.windll.kernel32.GlobalMemoryStatusEx(ctypes.byref(st))
         return int(st.ullAvailPhys // 1048576)
-    except Exception:
-        pass
+    except Exception as _e:
+        logger.debug('suppressed: %s', _e)
     return 0
 
 
@@ -936,8 +936,8 @@ def _weights_gb(model_id: str) -> float:
                        if f.is_file()) / 1e9
         if mp.is_file():
             return mp.stat().st_size / 1e9
-    except Exception:
-        pass
+    except Exception as _e:
+        logger.debug('suppressed: %s', _e)
     return 0.0
 
 
@@ -957,8 +957,8 @@ def _plan_device(model_id: str, pixels: int = 0) -> dict:
         if torch.cuda.is_available():
             vram_free, _total = torch.cuda.mem_get_info()
             vram_free = int(vram_free // 1048576)
-    except Exception:
-        pass
+    except Exception as _e:
+        logger.debug('suppressed: %s', _e)
     if need_mib > 0 and vram_free >= need_mib:
         return {"device": "cuda", "dtype": None, "fit": "vram",
                 "need_mib": need_mib, "vram_free_mib": vram_free}
@@ -1132,8 +1132,8 @@ def ensure_model_loaded(requested: str | None, pixels: int = 0) -> str:
                 gc.collect()
                 try:
                     torch.cuda.empty_cache()
-                except Exception:
-                    pass
+                except Exception as _e:
+                    logger.debug('suppressed: %s', _e)
                 if isinstance(e, torch.OutOfMemoryError) or "out of memory" in str(e).lower():
                     raise HTTPException(status_code=503, detail={
                         "error": "will not load",
@@ -1165,8 +1165,8 @@ def load_model(device: str | None = None, dtype: str | None = None):
         logger.info("transformers=%s has_CLIPFeatureExtractor=%s",
                     getattr(_tf_log, "__version__", "?"),
                     hasattr(_tf_log, "CLIPFeatureExtractor"))
-    except Exception:
-        pass
+    except Exception as _e:
+        logger.debug('suppressed: %s', _e)
 
     model_path = _args.model
     _model_id = Path(model_path).name
@@ -1190,8 +1190,8 @@ def load_model(device: str | None = None, dtype: str | None = None):
             from huggingface_hub import login
             login(token=_hf_token, add_to_git_credential=False)
             logger.info("Logged in to HuggingFace Hub")
-        except Exception as e:
-            logger.warning(f"HF login failed: {e}")
+        except Exception:
+            logger.warning("HF login failed (token may be invalid)")
     else:
         logger.warning("No HF_TOKEN set — gated models will fail")
 
@@ -1503,14 +1503,14 @@ def load_model(device: str | None = None, dtype: str | None = None):
         try:
             _pipe.enable_attention_slicing()
             logger.info("Attention slicing enabled")
-        except Exception:
-            pass
+        except Exception as _e:
+            logger.debug('suppressed: %s', _e)
     if _args.vae_slicing:
         try:
             _pipe.enable_vae_slicing()
             logger.info("VAE slicing enabled")
-        except Exception:
-            pass
+        except Exception as _e:
+            logger.debug('suppressed: %s', _e)
 
     # NOTE (2026-10-03): casting VAE to fp32 was tried and REVERTED the same
     # day -- with UNet in fp16 the fp32 VAE entry conv gets Half latents and
