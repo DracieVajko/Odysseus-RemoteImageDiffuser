@@ -389,7 +389,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     override fun onDestroy() {
-        if (isRecording) { try { mediaRecorder?.stop() } catch (_: Exception) {} }
+        if (isRecording) { try { mediaRecorder?.stop() } catch (_: Exception) { /* cleanup */ } }
         mediaRecorder?.release()
         mediaRecorder = null
         handler.removeCallbacks(ticker)

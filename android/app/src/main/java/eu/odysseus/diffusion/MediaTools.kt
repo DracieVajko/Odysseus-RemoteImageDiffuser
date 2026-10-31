@@ -204,8 +204,8 @@ object MediaTools {
             }
             if (written == 0L) throw Unsupported("nothing in the requested time range")
         } finally {
-            try { muxer?.stop() } catch (_: Exception) {}
-            try { muxer?.release() } catch (_: Exception) {}
+            try { muxer?.stop() } catch (_: Exception) { /* cleanup */ }
+            try { muxer?.release() } catch (_: Exception) { /* cleanup */ }
             extractor.release()
         }
         val bytes = outFile.readBytes()
@@ -247,8 +247,8 @@ object MediaTools {
                         extractor.advance()
                     }
                 } finally {
-                    try { muxer?.stop() } catch (_: Exception) {}
-                    try { muxer?.release() } catch (_: Exception) {}
+                    try { muxer?.stop() } catch (_: Exception) { /* cleanup */ }
+                    try { muxer?.release() } catch (_: Exception) { /* cleanup */ }
                 }
                 val bytes = outFile.readBytes()
                 outFile.delete()
@@ -497,7 +497,7 @@ object MediaTools {
             while (!outputDone && guard++ < 100) drain(true)
 
             encoder.stop(); encoder.release()
-            if (muxStarted) { try { muxer?.stop() } catch (_: Exception) {} }
+            if (muxStarted) { try { muxer?.stop() } catch (_: Exception) { /* cleanup */ } }
             muxer?.release(); muxer = null
 
             val bytes = outFile.readBytes()
@@ -508,9 +508,9 @@ object MediaTools {
         } catch (e: Exception) {
             throw Unsupported("audio encode failed: ${e.message ?: e.javaClass.simpleName}")
         } finally {
-            try { encoder.stop() } catch (_: Exception) {}
-            try { encoder.release() } catch (_: Exception) {}
-            try { muxer?.release() } catch (_: Exception) {}
+            try { encoder.stop() } catch (_: Exception) { /* cleanup */ }
+            try { encoder.release() } catch (_: Exception) { /* cleanup */ }
+            try { muxer?.release() } catch (_: Exception) { /* cleanup */ }
             outFile.delete()
         }
     }

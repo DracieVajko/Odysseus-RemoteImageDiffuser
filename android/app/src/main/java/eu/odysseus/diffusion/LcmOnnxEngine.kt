@@ -65,8 +65,8 @@ object LcmOnnxEngine {
             }
             val opts = OrtSession.SessionOptions().apply {
                 val threads = HardwareProfile.optimalThreads(ctx)
-                try { setIntraOpNumThreads(threads) } catch (_: Exception) {}
-                try { setOptimizationLevel(OrtSession.SessionOptions.OptLevel.BASIC_OPT) } catch (_: Exception) {}
+                try { setIntraOpNumThreads(threads) } catch (_: Exception) { /* cleanup */ }
+                try { setOptimizationLevel(OrtSession.SessionOptions.OptLevel.BASIC_OPT) } catch (_: Exception) { /* cleanup */ }
                 val accel = AppConfig.acceleration.lowercase()
                 var providerOk = false
                 if (accel != "cpu") {
@@ -131,10 +131,10 @@ object LcmOnnxEngine {
     fun isReady(): Boolean = isReady && unet != null && textEncoder != null && vae != null
 
     fun release() {
-        try { unet?.close() } catch (_: Exception) {}
-        try { textEncoder?.close() } catch (_: Exception) {}
-        try { vae?.close() } catch (_: Exception) {}
-        try { vaeEncoder?.close() } catch (_: Exception) {}
+        try { unet?.close() } catch (_: Exception) { /* cleanup */ }
+        try { textEncoder?.close() } catch (_: Exception) { /* cleanup */ }
+        try { vae?.close() } catch (_: Exception) { /* cleanup */ }
+        try { vaeEncoder?.close() } catch (_: Exception) { /* cleanup */ }
         unet = null; textEncoder = null; vae = null; vaeEncoder = null
         env = null
         isReady = false
@@ -370,7 +370,7 @@ object LcmOnnxEngine {
         buf.get(arr)
         result.close()
         tensor.close()
-        feed.values.forEach { try { it.close() } catch (_: Exception) {} }
+        feed.values.forEach { try { it.close() } catch (_: Exception) { /* cleanup */ } }
         out.close()
         return arr
     }
@@ -486,7 +486,7 @@ object LcmOnnxEngine {
         buf.get(arr)
         result.close()
         sampleTensor.close(); tTensor.close(); embedTensor.close()
-        feed.values.forEach { try { it.close() } catch (_: Exception) {} }
+        feed.values.forEach { try { it.close() } catch (_: Exception) { /* cleanup */ } }
         out.close()
         return arr
     }

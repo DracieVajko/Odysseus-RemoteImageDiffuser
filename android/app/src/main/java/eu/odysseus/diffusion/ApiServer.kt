@@ -962,7 +962,7 @@ private val batchState = ConcurrentHashMap<String, BatchState>()
                     call.respond(HttpStatusCode.InternalServerError, jsonOf(
                         "error" to "ffmpeg operation failed: ${e.message}"))
                 } finally {
-                    try { tmp.delete() } catch (_: Exception) {}
+                    try { tmp.delete() } catch (_: Exception) { /* cleanup */ }
                 }
             }
             post("/v1/images/generations") {

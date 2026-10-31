@@ -267,23 +267,23 @@ object VideoTranscoder {
             return MediaTools.Output(bytes, "compressed.mp4", "video/mp4")
 
         } catch (e: Exception) {
-            try { outFile.delete() } catch (_: Exception) {}
+            try { outFile.delete() } catch (_: Exception) { /* cleanup */ }
             if (e is MediaTools.Unsupported) throw e
             throw MediaTools.Unsupported("video re-encode failed: ${e.message ?: e.javaClass.simpleName}")
         } finally {
-            try { decoder?.stop() } catch (_: Exception) {}
-            try { decoder?.release() } catch (_: Exception) {}
-            try { encoder?.stop() } catch (_: Exception) {}
-            try { encoder?.release() } catch (_: Exception) {}
-            try { muxer?.stop() } catch (_: Exception) {}
-            try { muxer?.release() } catch (_: Exception) {}
-            try { encoderInputSurface?.release() } catch (_: Exception) {}
-            try { decoderOutputSurface?.release() } catch (_: Exception) {}
-            try { surfaceTexture?.release() } catch (_: Exception) {}
-            try { extractor.release() } catch (_: Exception) {}
-            try { if (eglDisplay != null && eglSurface != null) EGL14.eglDestroySurface(eglDisplay, eglSurface) } catch (_: Exception) {}
-            try { if (eglDisplay != null && eglContext != null) EGL14.eglDestroyContext(eglDisplay, eglContext) } catch (_: Exception) {}
-            try { if (eglDisplay != null) EGL14.eglTerminate(eglDisplay) } catch (_: Exception) {}
+            try { decoder?.stop() } catch (_: Exception) { /* cleanup */ }
+            try { decoder?.release() } catch (_: Exception) { /* cleanup */ }
+            try { encoder?.stop() } catch (_: Exception) { /* cleanup */ }
+            try { encoder?.release() } catch (_: Exception) { /* cleanup */ }
+            try { muxer?.stop() } catch (_: Exception) { /* cleanup */ }
+            try { muxer?.release() } catch (_: Exception) { /* cleanup */ }
+            try { encoderInputSurface?.release() } catch (_: Exception) { /* cleanup */ }
+            try { decoderOutputSurface?.release() } catch (_: Exception) { /* cleanup */ }
+            try { surfaceTexture?.release() } catch (_: Exception) { /* cleanup */ }
+            try { extractor.release() } catch (_: Exception) { /* cleanup */ }
+            try { if (eglDisplay != null && eglSurface != null) EGL14.eglDestroySurface(eglDisplay, eglSurface) } catch (_: Exception) { /* cleanup */ }
+            try { if (eglDisplay != null && eglContext != null) EGL14.eglDestroyContext(eglDisplay, eglContext) } catch (_: Exception) { /* cleanup */ }
+            try { if (eglDisplay != null) EGL14.eglTerminate(eglDisplay) } catch (_: Exception) { /* cleanup */ }
         }
     }
 
