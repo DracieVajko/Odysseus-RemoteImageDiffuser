@@ -3,9 +3,7 @@
 Interactive menu system for Odysseus Diffusion Server.
 Run with: python run_diffusion_menu.py
 """
-import sys
 import os
-import json
 import base64
 import requests
 import time
