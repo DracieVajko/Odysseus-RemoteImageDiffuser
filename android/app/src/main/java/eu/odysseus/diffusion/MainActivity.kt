@@ -1171,22 +1171,32 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun stopRecording() {
-        try {
-            mediaRecorder?.apply { stop(); release() }
-        } catch (e: Exception) {
-            toast("stop failed: ${e.message}")
-        }
+        val recorder = mediaRecorder
         mediaRecorder = null
+        if (recorder != null) {
+            // stop() and release() are separate calls on purpose: MediaRecorder.stop()
+            // throws when no frames were captured (e.g. a tap right after start), and
+            // the recorder must still be released in that case.
+            try {
+                recorder.stop()
+            } catch (e: Exception) {
+                toast("stop failed: ${e.message}")
+            }
+            try {
+                recorder.release()
+            } catch (_: Exception) { /* cleanup */ }
+        }
         isRecording = false
         btnRecordAudio.text = "Record"
-        recordingFile?.let { f ->
-            if (f.exists() && f.length() > 0) {
-                audioUri = android.net.Uri.fromFile(f)
-                audioFileLabel.text = "recorded: ${f.name} (${f.length() / 1024} KB)"
-                toast("Recording saved, ready to transcribe")
-            } else {
-                toast("recording empty")
-            }
+        val f = recordingFile
+        recordingFile = null
+        if (f != null && f.exists() && f.length() > 0) {
+            audioUri = android.net.Uri.fromFile(f)
+            audioFileLabel.text = "recorded: ${f.name} (${f.length() / 1024} KB)"
+            toast("Recording saved, ready to transcribe")
+        } else {
+            toast("recording empty")
+            f?.delete()
         }
     }
 
