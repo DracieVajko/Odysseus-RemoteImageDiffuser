@@ -140,48 +140,104 @@ def release():
         pass
 
 
+def _language_name(code: str) -> str:
+    return {
+        "sk": "Slovak", "cs": "Czech", "en": "English", "de": "German",
+        "fr": "French", "es": "Spanish", "it": "Italian", "pl": "Polish",
+        "ru": "Russian", "uk": "Ukrainian", "hu": "Hungarian",
+    }.get(code, code)
+
+
+def _plausible(output: str, source: str) -> bool:
+    """Reject degenerate generations that would make the endpoint worse.
+
+    Greedy decoding on a bf16 CPU copy occasionally loops or emits token soup
+    (replacement characters). Falling back to the source text is always safer
+    than returning garbage to the caller.
+    """
+    if not output.strip():
+        return False
+    if "\ufffd" in output:
+        return False
+    # A cleanup/rewrite must stay in the same order of magnitude as the input.
+    if len(output) > max(64, len(source) * 3):
+        return False
+    return True
+
+
 def process(text: str, instruction: str = "cleanup", target_lang: str = "") -> str:
     """Post-process text with Gemma4.
 
     instruction: 'cleanup' | 'translate' | 'summarize' | 'rewrite'
     target_lang: target language for translation (e.g. 'en', 'sk')
     """
+    if not text.strip():
+        return text
     if _model is None:
         if not init():
             return text
     try:
         import torch
+        lang_name = _language_name(target_lang)
         prompts = {
             "cleanup": (
-                "Fix spelling, grammar, and punctuation in the following "
-                "transcription. Keep the original language. Return only the "
-                "corrected text, nothing else.\n\n{text}"
+                "You are a transcription editor. Correct the spelling, grammar "
+                "and punctuation of the {lang} text below. Keep it in {lang}. "
+                "Do not add commentary, do not translate, do not repeat the "
+                "instructions. Reply with the corrected text only.\n\n"
+                "Text:\n{text}\n\nCorrected text:"
             ),
             "translate": (
-                "Translate the following text to {lang}. Return only the "
-                "translation, nothing else.\n\n{text}"
+                "Translate the text below into {lang}. Reply with the "
+                "translation only, without commentary.\n\n"
+                "Text:\n{text}\n\nTranslation:"
             ),
             "summarize": (
-                "Summarize the following text in a few sentences. "
-                "Return only the summary.\n\n{text}"
+                "Summarize the text below in a few sentences. Reply with the "
+                "summary only.\n\nText:\n{text}\n\nSummary:"
             ),
             "rewrite": (
-                "Rewrite the following text to be clearer and more readable, "
-                "while preserving the meaning. Return only the rewritten text.\n\n{text}"
+                "Rewrite the text below so it is clearer and easier to read, "
+                "keeping the meaning and the original language. Reply with the "
+                "rewritten text only.\n\nText:\n{text}\n\nRewritten text:"
             ),
         }
         template = prompts.get(instruction, prompts["cleanup"])
-        lang_name = {"sk": "Slovak", "cs": "Czech", "en": "English", "de": "German",
-                     "fr": "French", "es": "Spanish", "it": "Italian", "pl": "Polish",
-                     "ru": "Russian", "uk": "Ukrainian", "hu": "Hungarian"}.get(target_lang, target_lang)
         prompt = template.format(text=text, lang=lang_name)
         messages = [{"role": "user", "content": prompt}]
-        inputs = _processor.apply_chat_template(messages, add_generation_prompt=True, tokenize=True, return_dict=True, return_tensors="pt")
+        inputs = _processor.apply_chat_template(
+            messages, add_generation_prompt=True, tokenize=True,
+            return_dict=True, return_tensors="pt")
         inputs = {k: v.to(_model.device) for k, v in inputs.items()}
+
+        # Bound the generation: a cleanup should never need more than roughly
+        # 1.5x the input, a summary needs less. Without this the model can
+        # ramble for hundreds of tokens.
+        prompt_tokens = int(inputs["input_ids"].shape[1])
+        if instruction == "summarize":
+            budget = 200
+        else:
+            budget = max(48, min(1024, prompt_tokens))
+        budget = min(budget, 1024)
+
         with torch.no_grad():
-            out = _model.generate(**inputs, max_new_tokens=2048, do_sample=False)
-        result = _processor.decode(out[0][inputs["input_ids"].shape[1]:], skip_special_tokens=True)
-        return result.strip()
+            out = _model.generate(
+                **inputs,
+                max_new_tokens=budget,
+                do_sample=False,
+                repetition_penalty=1.15,
+                no_repeat_ngram_size=4,
+                pad_token_id=getattr(_processor.tokenizer, "pad_token_id", None)
+                or getattr(_processor.tokenizer, "eos_token_id", None),
+            )
+        result = _processor.decode(
+            out[0][inputs["input_ids"].shape[1]:], skip_special_tokens=True).strip()
+
+        if not _plausible(result, text):
+            logger.warning("Gemma4 %s output rejected (len=%d), returning source",
+                           instruction, len(result))
+            return text
+        return result
     except Exception as e:
         logger.error("Gemma4 process failed: %s", e)
         return text

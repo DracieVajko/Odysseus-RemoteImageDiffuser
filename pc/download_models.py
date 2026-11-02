@@ -148,7 +148,7 @@ def download_hf(task):
         print(f"[{task['id']}] downloading {task['file']} ...", flush=True)
 
         def _dl():
-            p = hf_hub_download(task["repo"], task["file"], local_dir=str(target))
+            p = hf_hub_download(task["repo"], task["file"], local_dir=str(target), revision="main")
             got, dest = Path(p), target / task["file"]
             if got != dest:
                 if dest.exists():
@@ -168,7 +168,7 @@ def download_hf(task):
         for rel in files:
             _check_cancel(task["id"])
             run_with_retries(
-                lambda rel=rel: hf_hub_download(task["repo"], rel, local_dir=str(target)),
+                lambda rel=rel: hf_hub_download(task["repo"], rel, local_dir=str(target), revision="main"),
                 task["id"],
             )
     size = dir_size_gb(target)

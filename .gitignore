@@ -102,3 +102,9 @@ lmstudio/
 
 # llama.cpp + mtmd sources (cloned by android/tools/fetch_third_party.ps1)
 android/third_party/
+
+# desloppify local state
+.desloppify/
+
+# desloppify generated scorecard
+scorecard.png
