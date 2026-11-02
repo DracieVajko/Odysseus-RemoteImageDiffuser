@@ -37,29 +37,94 @@ def is_installed() -> bool:
     return (d / "model.safetensors").exists() or (d / "config.json").exists()
 
 
+def _model_bytes() -> int:
+    d = _get_model_dir()
+    total = 0
+    for p in d.glob("*.safetensors"):
+        try:
+            total += p.stat().st_size
+        except OSError:
+            continue
+    return total
+
+
+def _cuda_fits() -> bool:
+    """True when the weights fit in the GPU's free VRAM with headroom.
+
+    A partial device_map split across CUDA and CPU is what produced
+    'CUDA driver error: device not ready' with the 9.8 GB E2B checkpoint on a
+    6 GB card, so we only pick CUDA when the whole model fits.
+    """
+    try:
+        import torch
+        if not torch.cuda.is_available():
+            return False
+        free, _total = torch.cuda.mem_get_info()
+        needed = _model_bytes()
+        # 1.15x headroom for the KV cache and activations
+        return needed > 0 and needed * 1.15 < free
+    except Exception:
+        return False
+
+
+def _load(device: str):
+    from transformers import AutoProcessor, AutoModelForImageTextToText
+
+    d = _get_model_dir()
+    if device == "cuda":
+        import torch
+        return (
+            AutoProcessor.from_pretrained(str(d)),
+            AutoModelForImageTextToText.from_pretrained(
+                str(d), dtype=torch.bfloat16, device_map="cuda"),
+        )
+    # CPU: bfloat16 keeps the resident footprint at ~10 GB (float32 would need
+    # ~20 GB and push a 32 GB machine into swap). PyTorch supports bf16 CPU
+    # kernels on every modern x86 build.
+    import torch
+    return (
+        AutoProcessor.from_pretrained(str(d)),
+        AutoModelForImageTextToText.from_pretrained(
+            str(d), dtype=torch.bfloat16, device_map="cpu"),
+    )
+
+
 def init(device: str = "auto") -> bool:
-    """Load Gemma4 model. Returns True on success."""
+    """Load Gemma4. Falls back to CPU when the weights do not fit in VRAM."""
     global _processor, _model, _device
     if _model is not None:
         return True
     if not is_installed():
         logger.warning("Gemma4 not installed at %s", _get_model_dir())
         return False
-    try:
-        import torch
-        from transformers import AutoProcessor, AutoModelForImageTextToText
-        d = _get_model_dir()
-        _device = "cuda" if (device == "auto" and torch.cuda.is_available()) else (device if device != "auto" else "cpu")
-        dtype = torch.bfloat16 if _device == "cuda" else torch.float32
-        _processor = AutoProcessor.from_pretrained(str(d))
-        _model = AutoModelForImageTextToText.from_pretrained(str(d), dtype=dtype, device_map=_device)
-        logger.info("Gemma4 loaded on %s", _device)
-        return True
-    except Exception as e:
-        logger.error("Gemma4 init failed: %s", e)
-        _processor = None
-        _model = None
-        return False
+
+    wanted = (device or "auto").lower()
+    if wanted == "auto":
+        wanted = "cuda" if _cuda_fits() else "cpu"
+        logger.info("Gemma4 device auto -> %s (weights %.1f GB)",
+                    wanted, _model_bytes() / 1e9)
+
+    last_error = None
+    for candidate in ([wanted, "cpu"] if wanted == "cuda" else [wanted]):
+        try:
+            _processor, _model = _load(candidate)
+            _device = candidate
+            logger.info("Gemma4 loaded on %s", candidate)
+            return True
+        except Exception as e:
+            last_error = e
+            logger.warning("Gemma4 load on %s failed: %s", candidate, str(e)[:200])
+            _processor = None
+            _model = None
+            try:
+                import torch
+                if torch.cuda.is_available():
+                    torch.cuda.empty_cache()
+            except Exception:
+                pass
+
+    logger.error("Gemma4 init failed: %s", last_error)
+    return False
 
 
 def release():
