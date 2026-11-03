@@ -432,6 +432,26 @@ def list_models():
             "downloadable": bool(entry),
             "has_source": bool(entry),
         })
+    # NVIDIA Nemotron 3.5 ASR: a real alternative to faster-whisper (40
+    # languages, native punctuation). Installed state is checked on disk.
+    try:
+        from unified import nemotron_asr as _nemo
+        data.append({
+            "id": _nemo.MODEL_ID, "object": "model", "owned_by": "nvidia",
+            "kind": "audio",
+            "label": "Nemotron 3.5 ASR 0.6B (40 languages, punctuated)",
+            "engine": "nemotron-asr",
+            "installed": _nemo.is_installed(),
+            "available": _nemo.is_installed(),
+            "size_mb": 2552,
+            "install_state": "idle",
+            "install_progress": 0,
+            "downloadable": True,
+            "has_source": _nemo.is_installed(),
+        })
+    except Exception:
+        pass
+
     # Remaining catalog entries (upscale/VLM, plus any audio id not in
     # reg["audio_models"]) that are not already listed.
     known = {d["id"] for d in data}
@@ -1516,7 +1536,14 @@ async def transcriptions(
         return JSONResponse(status_code=400, content={"error": "missing file or url"})
     raw_model = (model or "").strip() or (model_name or "").strip() or "whisper-1"
     wanted = "small" if raw_model == "whisper-1" else raw_model
-    if wanted not in ALLOWED_WHISPER:
+    # NVIDIA Nemotron 3.5 ASR: opt in per request, or globally with
+    # PRISM_ASR_ENGINE=nemotron.
+    from unified import nemotron_asr
+    use_nemotron = (
+        wanted in (nemotron_asr.MODEL_ID, "nemotron")
+        or (nemotron_asr.enabled() and raw_model == "whisper-1")
+    )
+    if not use_nemotron and wanted not in ALLOWED_WHISPER:
         return JSONResponse(status_code=400,
                             content={"error": f"Unknown model '{raw_model}'"})
     if device and device.strip().lower() not in ("cuda", "cpu", ""):
@@ -1552,35 +1579,58 @@ async def transcriptions(
             _job_update(rid, total=float(get_audio_duration(Path(tmp)) or 0.0))
         except Exception:
             pass
-        try:
-            split_enabled = auto_split.lower() in ("true", "1", "yes", "on")
-            logger.info(f"transcribe: starting engine (split={split_enabled})")
-            if split_enabled:
-                text, lang, segments = await _transcribe_with_splitting(
-                    Path(tmp), wanted, language, rid)
-            else:
-                text, lang, segments = await asyncio.to_thread(
-                    _transcribe_chunked, Path(tmp), wanted, language, rid)
-            engine = "local"
-        except JobCancelled:
-            # Must not fall through to the proxy: the user asked to stop.
-            raise
-        except Exception as e:
-            logger.warning("local whisper missing (%s), proxy %s",
-                             str(e)[:120], WHISPER_SERVICE_URL)
-            proxied = transcribe_via_service(
-                WHISPER_SERVICE_URL, content, up.filename or "audio.wav",
-                wanted, language)
-            if proxied is not None:
-                text, lang = proxied
+        if use_nemotron:
+            # Nemotron is an explicit engine choice: never fall through to the
+            # WhisperApi proxy when it fails, otherwise the caller silently gets
+            # a different engine's output.
+            if not nemotron_asr.is_installed():
+                _job_finish(rid, "error", "nemotron not installed")
+                return JSONResponse(status_code=503, content={
+                    "error": "nemotron asr not installed",
+                    "detail": "run: python pc/tools/download_nemotron_asr.py"})
+            try:
+                logger.info("transcribe: engine=nemotron-asr lang=%s", language)
+                text, lang = await asyncio.to_thread(
+                    nemotron_asr.transcribe, tmp, language)
                 segments = []
-                engine = "whisper-service"
-                # nothing is kept in RAM locally → release the gate immediately for images
-                _manager.unload("audio-proxied")
-            else:
-                text, lang = "[unified stub — start the WhisperApi service or install faster-whisper]", language
-                segments = []
-                engine = "stub"
+                engine = "nemotron-asr"
+            except JobCancelled:
+                raise
+            except Exception as e:
+                _job_finish(rid, "error", str(e)[:200])
+                logger.error("nemotron transcribe failed: %s", str(e)[:400])
+                return JSONResponse(status_code=500, content={
+                    "error": "nemotron asr failed", "detail": str(e)[:300]})
+        else:
+            try:
+                split_enabled = auto_split.lower() in ("true", "1", "yes", "on")
+                logger.info(f"transcribe: starting engine (split={split_enabled})")
+                if split_enabled:
+                    text, lang, segments = await _transcribe_with_splitting(
+                        Path(tmp), wanted, language, rid)
+                else:
+                    text, lang, segments = await asyncio.to_thread(
+                        _transcribe_chunked, Path(tmp), wanted, language, rid)
+                engine = "local"
+            except JobCancelled:
+                # Must not fall through to the proxy: the user asked to stop.
+                raise
+            except Exception as e:
+                logger.warning("local whisper missing (%s), proxy %s",
+                                 str(e)[:120], WHISPER_SERVICE_URL)
+                proxied = transcribe_via_service(
+                    WHISPER_SERVICE_URL, content, up.filename or "audio.wav",
+                    wanted, language)
+                if proxied is not None:
+                    text, lang = proxied
+                    segments = []
+                    engine = "whisper-service"
+                    # nothing is kept in RAM locally → release the gate immediately for images
+                    _manager.unload("audio-proxied")
+                else:
+                    text, lang = "[unified stub — start the WhisperApi service or install faster-whisper]", language
+                    segments = []
+                    engine = "stub"
         # Optional Gemma4 post-processing (cleanup, translate, summarize, rewrite)
         if post_process and text and not text.startswith("[unified stub"):
             try:

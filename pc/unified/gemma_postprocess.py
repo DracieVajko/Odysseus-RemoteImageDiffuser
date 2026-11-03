@@ -78,14 +78,17 @@ def _load(device: str):
             AutoModelForImageTextToText.from_pretrained(
                 str(d), dtype=torch.bfloat16, device_map="cuda"),
         )
-    # CPU: bfloat16 keeps the resident footprint at ~10 GB (float32 would need
-    # ~20 GB and push a 32 GB machine into swap). PyTorch supports bf16 CPU
-    # kernels on every modern x86 build.
+    # CPU defaults to bfloat16 (~10 GB resident). float32 doubles the footprint
+    # to ~20 GB but decodes diacritics noticeably better, so it is opt-in via
+    # PRISM_GEMMA_DTYPE=float32 on machines with enough RAM.
     import torch
+    want = os.environ.get("PRISM_GEMMA_DTYPE", "bfloat16").strip().lower()
+    dtype = torch.float32 if want in ("float32", "fp32", "f32") else torch.bfloat16
+    logger.info("Gemma4 CPU dtype=%s", dtype)
     return (
         AutoProcessor.from_pretrained(str(d)),
         AutoModelForImageTextToText.from_pretrained(
-            str(d), dtype=torch.bfloat16, device_map="cpu"),
+            str(d), dtype=dtype, device_map="cpu"),
     )
 
 
