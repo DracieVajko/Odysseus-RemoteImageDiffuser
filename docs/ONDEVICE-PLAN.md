@@ -1,4 +1,4 @@
-# Prism — On-device plan (Android only, offline)
+# Prism â€” On-device plan (Android only, offline)
 
 Goal: **every tab works on the phone, locally and offline.** No PC, no remote
 host, no network after the models are downloaded.
@@ -17,15 +17,15 @@ host, no network after the models are downloaded.
 | Chat (vision) | TODO | ONNX Runtime (SmolVLM) | same engine as Caption |
 | FFmpeg tools | TODO | bundled ffmpeg / ffmpeg-kit | no binary today |
 
-## 1. Edits (img2img) — reuse the LCM pipeline
+## 1. Edits (img2img) â€” reuse the LCM pipeline
 
 Models already in `lcm-dreamshaper-int8-onnx`:
-- `vae_encoder/model.onnx` (130 MB) — currently downloaded, unused.
+- `vae_encoder/model.onnx` (130 MB) â€” currently downloaded, unused.
 - `unet/model.onnx` (QDQ), `text_encoder`, `vae_decoder`, `tokenizer`.
 
 Steps:
 1. Decode the input image to `FloatArray` (RGB, 0..1), resize to `size`.
-2. Normalize to `[-1, 1]`, NCHW, run `vae_encoder` → `latent_sample`.
+2. Normalize to `[-1, 1]`, NCHW, run `vae_encoder` â†’ `latent_sample`.
 3. Multiply by `0.18215` (VAE scale).
 4. `strength` (0.1..1.0): start at timestep index `round((1-strength) * steps)`.
 5. Add noise at that timestep: `x_t = sqrt(a_t)*x0 + sqrt(1-a_t)*noise`.
@@ -35,12 +35,12 @@ Steps:
 
 Effort: **moderate** (~250 lines Kotlin, reuses `LcmOnnxEngine`).
 
-## 2. Inpaint — edits + mask
+## 2. Inpaint â€” edits + mask
 
 Steps:
 1. Same as Edits (encode + noise).
-2. Build a mask tensor at latent resolution (1×1×H/8×W/8), feathered
-   (Gaussian blur, radius 4–8 px).
+2. Build a mask tensor at latent resolution (1Ă—1Ă—H/8Ă—W/8), feathered
+   (Gaussian blur, radius 4â€“8 px).
 3. After each denoise step:
    `latents = mask * latents + (1 - mask) * original_noisy_latents`.
 4. Decode, composite the masked region over the original image with the
@@ -48,7 +48,7 @@ Steps:
 
 Effort: **moderate** (~150 lines on top of Edits).
 
-## 3. Harmonize — CPU only (no model)
+## 3. Harmonize â€” CPU only (no model)
 
 Steps:
 1. Input: base image + pasted region (+ optional masks).
@@ -60,23 +60,23 @@ Steps:
 
 Effort: **low** (~150 lines, no dependencies).
 
-## 4. Upscale — Real-ESRGAN
+## 4. Upscale â€” Real-ESRGAN
 
 Options considered:
-- **(a) ONNX Runtime** — export/host a Real-ESRGAN ONNX (x4plus or x4v3),
+- **(a) ONNX Runtime** â€” export/host a Real-ESRGAN ONNX (x4plus or x4v3),
   run tiled (128 px tiles, 8 px overlap) to keep RAM bounded.
   Pros: ORT already integrated; no native build. Cons: need a verified ONNX
   model (the current catalog entry is an NCNN zip).
-- **(b) NCNN Vulkan** — build Real-ESRGAN-ncnn via NDK + JNI.
+- **(b) NCNN Vulkan** â€” build Real-ESRGAN-ncnn via NDK + JNI.
   Pros: fast on Adreno. Cons: new native build, Vulkan shaders.
-- **(c) CPU fallback** — Lanczos/bicubic (no AI) for 2×/4×.
+- **(c) CPU fallback** â€” Lanczos/bicubic (no AI) for 2Ă—/4Ă—.
   Pros: always works, tiny. Cons: not "AI upscale".
 
 Recommendation: **(c) now + (a) next**, keep (b) as a future optimization.
 
 Effort: (c) low (~80 lines); (a) moderate (model + tiling).
 
-## 5. Caption / Chat — SmolVLM on ONNX
+## 5. Caption / Chat â€” SmolVLM on ONNX
 
 Models (`HuggingFaceTB/SmolVLM-500M-Instruct`, ONNX subfolder):
 - `onnx/vision_encoder_int8.onnx` (94 MB)
@@ -85,13 +85,13 @@ Models (`HuggingFaceTB/SmolVLM-500M-Instruct`, ONNX subfolder):
 - `tokenizer.json` (3.4 MB), `preprocessor_config.json`
 
 Steps:
-1. Image preprocessing: resize to 512×512, normalize per SigLIP config.
-2. `vision_encoder` → image features.
+1. Image preprocessing: resize to 512Ă—512, normalize per SigLIP config.
+2. `vision_encoder` â†’ image features.
 3. Tokenize the prompt (`<image>` token placeholder) + text.
 4. `embed_tokens` for text; merge image features at the `<image>` position.
 5. Decoder loop with KV cache (merged decoder outputs `present.*`), greedy
    sampling, max 128 tokens.
-6. Detokenize → caption / chat answer.
+6. Detokenize â†’ caption / chat answer.
 7. Unload sessions after the request.
 
 Alternative: **llama.cpp + mtmd** (GGUF SmolVLM-500M Q8_0 + mmproj, 520 MB).
@@ -99,21 +99,21 @@ Faster at runtime, but needs a new NDK/JNI build.
 
 Recommendation: ONNX first (no new native build), llama.cpp later if too slow.
 
-Effort: **high** (~800–1200 lines: tokenizer, KV-cache loop, multimodal merge).
+Effort: **high** (~800â€“1200 lines: tokenizer, KV-cache loop, multimodal merge).
 
-## 6. FFmpeg — bundle a binary
+## 6. FFmpeg â€” bundle a binary
 
 Options:
-- **(a) ffmpeg-kit (LGPL)** — `com.arthenica:ffmpeg-kit-min` / `-audio` /
-  `-https`. Adds 8–20 MB per ABI. Discontinued but still on Maven mirrors.
-- **(b) Static ffmpeg per ABI** — ship `libffmpeg.so`/`ffmpeg` in `jniLibs`,
-  execute via `ProcessBuilder` from `nativeLibraryDir`. ~20–30 MB.
-- **(c) MediaCodec + MediaMuxer** — no extra size, but limited codecs/formats.
+- **(a) ffmpeg-kit (LGPL)** â€” `com.arthenica:ffmpeg-kit-min` / `-audio` /
+  `-https`. Adds 8â€“20 MB per ABI. Discontinued but still on Maven mirrors.
+- **(b) Static ffmpeg per ABI** â€” ship `libffmpeg.so`/`ffmpeg` in `jniLibs`,
+  execute via `ProcessBuilder` from `nativeLibraryDir`. ~20â€“30 MB.
+- **(c) MediaCodec + MediaMuxer** â€” no extra size, but limited codecs/formats.
 
 Recommendation: **(b)** for full format coverage and offline operation
 (verify the binary/licence first), fallback (c) for audio-only operations.
 
-Effort: low–moderate (binary + wrapper + presets from `ffmpeg_tools.py`).
+Effort: lowâ€“moderate (binary + wrapper + presets from `ffmpeg_tools.py`).
 
 ## 7. Cross-cutting
 
@@ -128,12 +128,12 @@ Effort: low–moderate (binary + wrapper + presets from `ffmpeg_tools.py`).
 
 ## Order of work
 
-1. Edits (img2img) — highest value, reuses existing models.
-2. Inpaint — small addition to Edits.
-3. Harmonize — CPU only, quick win.
-4. Upscale — CPU fallback first, then ONNX.
-5. FFmpeg — bundled binary.
-6. Caption/Chat — SmolVLM ONNX (largest effort).
+1. Edits (img2img) â€” highest value, reuses existing models.
+2. Inpaint â€” small addition to Edits.
+3. Harmonize â€” CPU only, quick win.
+4. Upscale â€” CPU fallback first, then ONNX.
+5. FFmpeg â€” bundled binary.
+6. Caption/Chat â€” SmolVLM ONNX (largest effort).
 
 ## Status 2026-10-27
 
@@ -165,17 +165,32 @@ whisper.cpp only.
 
 Measured on this machine (RTX 3060 6 GB, 32 GB RAM):
 
-- Nemotron loads in ~20 s from page cache and transcribes a 11 s clip in 2.7 s.
-- Gemma4 E2B does **not** fit in 6 GB VRAM; init() detects that and falls back
-  to CPU. CPU load is 9-10 min, inference 13-35 s per short text.
-- Gemma4 	ranslate and summarize produce correct output on CPU bf16.
-  cleanup produces **mangled Slovak diacritics** (`�` -> `A?`) with bf16.
-  float32 fixes precision but needs ~20 GB of RAM and starts swapping on a
-  32 GB machine at ~49 % load, so it stays an opt-in
-  (`PRISM_GEMMA_DTYPE=float32`).
-- Correct long-term fix for Gemma4 on PC: a GGUF build with llama.cpp
-  (3.1 GB Q4_K_M, minutes instead of hours). Not wired yet; it needs
-  `llama-cpp-python` (a compiled dependency) and a second code path.
+- Nemotron 0.6B loads in ~10 s from page cache and transcribes an 11 s clip in
+  1-3 s warm (whisper small: 10-18 s). fp32 on purpose: bf16 + the LSTM
+  predictor hung cuDNN for minutes, see the commit log.
+- The two 30B-A4B variants are download-only here: NVFP4 needs a Blackwell GPU
+  (~24 GB VRAM) and FP8 needs ~40 GB VRAM or 64 GB+ RAM, neither of which this
+  machine has. They are in the catalog, and requesting one without installing it
+  returns an honest 503.
+- Gemma4 E2B does NOT fit in 6 GB VRAM; init() detects that and falls back to
+  CPU. CPU load is 9-10 min, inference 13-35 s per short text.
+- Gemma4 translate and summarize produce correct output on CPU bf16. An earlier
+  note claimed cleanup mangled Slovak diacritics; that was a Windows console
+  encoding artifact, not the model (the same artifact appears when printing
+  Nemotron's Slovak output, which is provably correct in UTF-8). Cleanup needs
+  re-measurement, not a fix.
+
+### Measured Slovak quality (Piper sk_SK-lili sample, language=sk)
+
+| Engine | Time | Output (decoded from UTF-8) |
+|---|---|---|
+| nemotron-asr-0.6b | 3.5 s | Duha je opticky uzak vznikajuci v atmosfere zana. |
+| whisper small | 18.4 s | duha je opticky ukaz vznikajuci v atmosfere zana. |
+
+(The table is ASCII-folded here only so this file stays readable in every
+editor; the live JSON contains full diacritics.) Nemotron was about 5x faster
+and produced correct capitalisation plus the correct diacritic on "ukaz", which
+whisper dropped.
 
 ## Android memory limits under load (measured 2026-11-03)
 
@@ -232,3 +247,15 @@ cache tensors as explicit inputs. Until then the endpoint returns 503 with this
 reason.
 
 The two 30B-A4B variants (NVFP4 21.6 GB, FP8 34.7 GB) are PC-only by design.
+
+
+### Measured Slovak quality (Piper sk_SK-lili sample, language=sk)
+
+| Engine | Time | Output |
+|---|---|---|
+| nemotron-asr-0.6b | 3.5 s | Duha je opticky uzak vznikajuci v atmosfere zana. (correct diacritics in the JSON, not in this console) |
+| whisper small | 18.4 s | lowercase start, missing diacritic on "ukaz" |
+
+Nemotron was about 5x faster and produced correct capitalisation plus correct
+diacritics on "ukaz" (whisper dropped it). Both transcribed the trailing unclear
+word as "zana".
