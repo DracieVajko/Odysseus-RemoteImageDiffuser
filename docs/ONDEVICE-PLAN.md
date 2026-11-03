@@ -193,3 +193,42 @@ not cover this case because the engine is busy, not idle.
 Also cleaned up: a 711 MB abandoned `sd15-onnx` staging directory that had
 survived since 2026-10-22. Staging paths are per-model, so an abandoned download
 is invisible to the catalog and never garbage-collected.
+
+## Nemotron on Android: what is missing
+
+The PC server can run all three Nemotron 3.5 variants. The Android app cannot
+yet, and it now says so instead of substituting whisper.
+
+Measured module structure of `nemotron-3.5-asr-streaming-0.6b` (638 M params):
+
+| Module | Type | Params |
+|---|---|---|
+| `encoder` | NemotronAsrStreamingEncoder | 609.1 M |
+| `encoder_projector` | Linear | 0.7 M |
+| `decoder` (prediction network) | Nemotron3_5AsrRNNTDecoder | 15.4 M |
+| `joint` | Nemotron3_5AsrRNNTJointNetwork | 8.4 M |
+| `prompt_projector` | Nemotron3_5AsrPromptProjector | 4.5 M |
+
+The processor emits `input_features` (B, T, 128), `attention_mask`,
+`num_lookahead_tokens` and `prompt_ids`.
+
+Plan to make it work on device (not implemented):
+
+1. Export three ONNX graphs on PC: `encoder.onnx` (features + mask +
+   prompt_ids to encoder_out), `decoder.onnx` (token to hidden),
+   `joint.onnx` (encoder step + hidden to logits).
+2. Dynamic-quantise the encoder to int8; the bundle lands around 700 MB to
+   1 GB, comparable to the whisper model already shipped.
+3. Greedy RNNT decode in Kotlin on top of `onnxruntime-android` (already a
+   dependency): for each encoder step run `joint` until blank, feeding the
+   emitted token back through `decoder`.
+4. Add `nemotron-asr-0.6b` to `ModelCatalog.kt` pointing at the ONNX bundle and
+   route `model=nemotron-asr-0.6b` in `handleAudio`.
+
+Risks: the encoder is cache-aware streaming (attention_context_left=13,
+attention_context_right=0, attention_chunk_size=12), so a single full-clip
+forward may not match the reference streaming output; the export may need the
+cache tensors as explicit inputs. Until then the endpoint returns 503 with this
+reason.
+
+The two 30B-A4B variants (NVFP4 21.6 GB, FP8 34.7 GB) are PC-only by design.

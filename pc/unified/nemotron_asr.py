@@ -17,14 +17,42 @@ logger = logging.getLogger("nemotron_asr")
 MODEL_ID = "nemotron-asr-0.6b"
 MAX_SECONDS_PER_CALL = 40.0  # the model is trained on <=40 s windows
 
+# Directory names must match download_models.AUDIO_TASKS targets.
+MODEL_DIRS = {
+    "nemotron-asr-0.6b": "nemotron-asr-0.6b",
+    "nemotron-transcribe-30b-a4b-nvfp4": "nemotron-transcribe-30b-a4b-nvfp4",
+    "nemotron-transcribe-30b-a4b-fp8": "nemotron-transcribe-30b-a4b-fp8",
+}
 
-def _model_dir() -> Path:
-    return Path(__file__).resolve().parent.parent / "models" / "nemotron-asr-0.6b"
+# Rough resident-memory requirement per variant, used to fail with a clear
+# message instead of letting the loader OOM the machine.
+MODEL_MIN_RAM_GB = {
+    "nemotron-asr-0.6b": 4.0,
+    "nemotron-transcribe-30b-a4b-nvfp4": 24.0,
+    "nemotron-transcribe-30b-a4b-fp8": 40.0,
+}
+
+_active_id = MODEL_ID
 
 
-def is_installed() -> bool:
-    d = _model_dir()
-    return (d / "model.safetensors").exists() and (d / "config.json").exists()
+def _model_dir(model_id: str = None) -> Path:
+    mid = model_id or _active_id
+    sub = MODEL_DIRS.get(mid, mid)
+    return Path(__file__).resolve().parent.parent / "models" / sub
+
+
+def is_installed(model_id: str = None) -> bool:
+    d = _model_dir(model_id)
+    has_weights = (d / "model.safetensors").exists() or (d / "model.safetensors.index.json").exists()
+    return has_weights and (d / "config.json").exists()
+
+
+def _total_ram_gb() -> float:
+    try:
+        import psutil
+        return psutil.virtual_memory().total / 1e9
+    except Exception:
+        return 0.0
 
 
 def enabled() -> bool:
@@ -48,23 +76,34 @@ def _auto_device():
     return "cpu"
 
 
-def init() -> bool:
-    global _processor, _model, _device
-    if _model is not None:
+def init(model_id: str = None) -> bool:
+    """Load a Nemotron variant. Returns False and logs the reason on failure."""
+    global _processor, _model, _device, _active_id
+    mid = model_id or _active_id
+    if _model is not None and mid == _active_id:
         return True
-    if not is_installed():
-        logger.warning("Nemotron ASR not installed at %s", _model_dir())
+    if _model is not None and mid != _active_id:
+        release()
+    _active_id = mid
+    if not is_installed(mid):
+        logger.warning("Nemotron ASR not installed at %s", _model_dir(mid))
+        return False
+    needed = MODEL_MIN_RAM_GB.get(mid, 4.0)
+    have = _total_ram_gb()
+    if have and have + 0.5 < needed:
+        logger.error("Nemotron %s needs ~%.0f GB RAM, this machine has %.1f GB",
+                     mid, needed, have)
         return False
     try:
         import torch
         from transformers import AutoModelForRNNT, AutoProcessor
 
-        d = str(_model_dir())
+        d = str(_model_dir(mid))
         _device = (os.environ.get("PRISM_NEMOTRON_DEVICE") or _auto_device()).strip().lower()
         dtype = torch.bfloat16 if _device == "cuda" else torch.float32
         _processor = AutoProcessor.from_pretrained(d)
         _model = AutoModelForRNNT.from_pretrained(d, dtype=dtype, device_map=_device)
-        logger.info("Nemotron ASR loaded on %s", _device)
+        logger.info("Nemotron ASR %s loaded on %s", mid, _device)
         return True
     except Exception as e:
         logger.error("Nemotron ASR init failed: %s", e)
@@ -109,9 +148,13 @@ def _normalise_language(code: Optional[str]) -> str:
     return "auto"
 
 
-def transcribe(audio_path: str, language: Optional[str] = None) -> tuple[str, str]:
+def transcribe(audio_path: str, language: Optional[str] = None,
+               model_id: str = None) -> tuple[str, str]:
     """Transcribe one file. Returns (text, language_used)."""
-    if _model is None and not init():
+    if model_id and model_id != _active_id:
+        if not init(model_id):
+            raise RuntimeError(f"nemotron model {model_id} not available")
+    elif _model is None and not init():
         raise RuntimeError("nemotron asr not available")
 
     import torch

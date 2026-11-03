@@ -1539,9 +1539,10 @@ async def transcriptions(
     # PRISM_ASR_ENGINE=nemotron.
     from unified import nemotron_asr
     use_nemotron = (
-        wanted in (nemotron_asr.MODEL_ID, "nemotron")
+        wanted.startswith("nemotron")
         or (nemotron_asr.enabled() and raw_model == "whisper-1")
     )
+    nemotron_id = wanted if wanted.startswith("nemotron") else nemotron_asr.MODEL_ID
     if not use_nemotron and wanted not in ALLOWED_WHISPER:
         return JSONResponse(status_code=400,
                             content={"error": f"Unknown model '{raw_model}'"})
@@ -1582,15 +1583,17 @@ async def transcriptions(
             # Nemotron is an explicit engine choice: never fall through to the
             # WhisperApi proxy when it fails, otherwise the caller silently gets
             # a different engine's output.
-            if not nemotron_asr.is_installed():
+            if not nemotron_asr.is_installed(nemotron_id):
                 _job_finish(rid, "error", "nemotron not installed")
                 return JSONResponse(status_code=503, content={
-                    "error": "nemotron asr not installed",
-                    "detail": "run: python pc/tools/download_nemotron_asr.py"})
+                    "error": f"{nemotron_id} not installed",
+                    "detail": "install it from the Models tab, or run "
+                              "python pc/tools/download_nemotron_asr.py"})
             try:
-                logger.info("transcribe: engine=nemotron-asr lang=%s", language)
+                logger.info("transcribe: engine=nemotron-asr model=%s lang=%s",
+                            nemotron_id, language)
                 text, lang = await asyncio.to_thread(
-                    nemotron_asr.transcribe, tmp, language)
+                    nemotron_asr.transcribe, tmp, language, nemotron_id)
                 segments = []
                 engine = "nemotron-asr"
             except JobCancelled:

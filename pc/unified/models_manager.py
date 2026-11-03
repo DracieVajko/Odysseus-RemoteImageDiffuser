@@ -301,6 +301,7 @@ def _catalog_tasks():
     out += [dict(t, group="image") for t in dm.TASKS]
     out += [dict(t, group="upscale") for t in dm.UPSCALE_TASKS]
     out += [dict(t, group="vlm") for t in dm.VLM_TASKS]
+    out += [dict(t, group="audio") for t in getattr(dm, "AUDIO_TASKS", [])]
     return out
 
 
@@ -346,7 +347,9 @@ def catalog() -> list:
             "id": t["id"],
             "kind": group,
             "kind_label": KIND_LABELS.get(group, group),
-            "engine": "url" if t.get("kind") == "url" else "torch",
+            "engine": ("url" if t.get("kind") == "url"
+                       else "nemotron-asr" if group == "audio"
+                       else "torch"),
             "label": t.get("note") or t.get("repo") or t.get("url") or t["id"],
             "license": t.get("license", ""),
             "size_gb": t.get("min_gb", 0.0),

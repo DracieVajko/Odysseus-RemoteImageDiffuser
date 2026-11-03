@@ -78,6 +78,33 @@ VLM_TASKS = [
      "license": "Apache-2.0 (see repo card)"},
 ]
 
+# Audio: NVIDIA Nemotron 3.5 ASR. All three are optional downloads; the 0.6B
+# runs comfortably on CPU, the 30B-A4B variants need far more memory than a
+# 6-8 GB GPU (see the note on each entry) and are offered for completeness.
+AUDIO_TASKS = [
+    {"id": "nemotron-asr-0.6b", "kind": "snapshot",
+     "repo": "nvidia/nemotron-3.5-asr-streaming-0.6b",
+     "target": "nemotron-asr-0.6b", "min_gb": 2.4,
+     "allow": ["config.json", "generation_config.json", "processor_config.json",
+               "tokenizer.json", "tokenizer_config.json", "model.safetensors"],
+     "note": "Nemotron 3.5 ASR 0.6B (40 languages, punctuated) - 2.55 GB, runs on CPU",
+     "license": "OpenMDW-1.1 (see repo card)"},
+    {"id": "nemotron-transcribe-30b-a4b-nvfp4", "kind": "snapshot",
+     "repo": "nvidia/NVIDIA-Nemotron-3.5-Transcribe-30B-A4B-NVFP4",
+     "target": "nemotron-transcribe-30b-a4b-nvfp4", "min_gb": 20.0,
+     "allow": ["*.json", "*.safetensors", "*.jinja", "*.txt", "tokenizer/*",
+               "llm_backbone/*"],
+     "note": "Nemotron 3.5 Transcribe 30B-A4B NVFP4 - 21.6 GB; needs a Blackwell GPU or ~24 GB VRAM",
+     "license": "OpenMDW-1.1 (see repo card)"},
+    {"id": "nemotron-transcribe-30b-a4b-fp8", "kind": "snapshot",
+     "repo": "nvidia/NVIDIA-Nemotron-3.5-Transcribe-30B-A4B-FP8",
+     "target": "nemotron-transcribe-30b-a4b-fp8", "min_gb": 33.0,
+     "allow": ["*.json", "*.safetensors", "*.jinja", "*.txt", "tokenizer/*",
+               "llm_backbone/*"],
+     "note": "Nemotron 3.5 Transcribe 30B-A4B FP8 - 34.7 GB; needs ~40 GB VRAM or 64 GB+ RAM",
+     "license": "OpenMDW-1.1 (see repo card)"},
+]
+
 # Upscale weights (small, also downloaded to the mobile package via ModelDownloader).
 # RealESRGAN_x4plus.pth: x4, general photos (BSD-3-Clause, xinntao/Real-ESRGAN,
 # stable GitHub release asset — no official HF repo for this weight).

@@ -1572,7 +1572,19 @@ private val batchState = ConcurrentHashMap<String, BatchState>()
             call.respond(HttpStatusCode.UnsupportedMediaType, jsonOf("error" to "unsupported extension .$ext"))
             return
         }
-// If the requested model is not installed, use the smallest installed
+// NVIDIA Nemotron 3.5 ASR has no on-device runtime in this build, so answer
+// honestly instead of silently falling back to whisper (that would return a
+// different engine's transcript under the requested model name).
+        if (model.lowercase().startsWith("nemotron")) {
+            call.respond(HttpStatusCode.ServiceUnavailable, jsonOf(
+                "error" to "$model is not available on device",
+                "reason" to "the FastConformer-RNNT runtime is not built into the app yet; " +
+                    "use whisper-* on Android, or the PC server for Nemotron",
+                "needed_mb" to -1, "free_mb" to -1))
+            return
+        }
+
+// If the requested whisper size is not installed, use the smallest installed
 // audio model (fast) — otherwise every default request would hit 503.
         val installedAudio = downloader.allAssets()
             .filter { it.kind == "audio" && downloader.isReady(it.id) }
