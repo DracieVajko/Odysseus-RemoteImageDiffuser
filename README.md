@@ -38,15 +38,44 @@ python -m uvicorn unified_server:app --host 0.0.0.0 --port 8101
 
 Open `http://127.0.0.1:8101/webui`. Full guide: `pc/docs/UNIFIED-OPS.md`.
 
-**Android only** — copy/download `android/`, then:
+**Android only** — install the APK, or build it yourself.
 
-```powershell
-cd android
-.\gradlew.bat :app:assembleDebug
-adb install -r app\build\outputs\apk\debug\app-debug.apk
+The APK is **not** in git: `android/app/build/` is gitignored, because a 71 MB
+binary does not belong in version control and any commit would go stale. There
+are three ways to get one:
+
+1. **GitHub Releases (easiest for users).** Push a tag and the
+   `Release` workflow builds and attaches the APK:
+   ```bash
+   git tag v0.1.0
+   git push origin v0.1.0
+   ```
+   Then download `prism-v0.1.0-release.apk` from
+   `https://github.com/<owner>/<repo>/releases`.
+2. **CI artifact.** Every push to `master` produces `prism-debug-apk` under
+   the run's *Artifacts* section (`.github/workflows/ci.yml`).
+3. **Build locally.**
+   ```powershell
+   cd android
+   .\gradlew.bat :app:assembleDebug     # debug, debug-key signed
+   .\gradlew.bat :app:assembleRelease   # minified; debug-key signed unless a keystore is configured
+   adb install -r app\build\outputs\apk\debug\app-debug.apk
+   ```
+
+To sign a release properly, create `android/keystore.properties`:
+```properties
+storeFile=/absolute/path/prism-release.jks
+storePassword=...
+keyAlias=prism
+keyPassword=...
 ```
+(or set `PRISM_KEYSTORE_FILE`, `PRISM_KEYSTORE_PASSWORD`, `PRISM_KEY_ALIAS`,
+`PRISM_KEY_PASSWORD`). Without it the release APK is signed with the debug key,
+which is installable by side-loading but not publishable on Play.
 
-Models are downloaded on the device from the in-app model catalog. Guide:
+On the phone: allow "Install unknown apps" for your browser/file manager, open
+the APK, install. Android 10+ (arm64-v8a). Models are downloaded on the device
+from the in-app model catalog; the app is fully offline afterwards. Guide:
 `android/README.md`.
 
 ## Shared development material (not needed at runtime)

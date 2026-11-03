@@ -24,6 +24,31 @@ android {
         }
     }
 
+    // Release signing is optional. When keystore.properties (or the matching
+    // env vars) is absent the release variant is signed with the debug key so
+    // `assembleRelease` still produces an installable APK for side-loading.
+    val keystoreProps = java.util.Properties().apply {
+        val f = rootProject.file("keystore.properties")
+        if (f.exists()) f.inputStream().use { load(it) }
+    }
+    val releaseStoreFile = (keystoreProps.getProperty("storeFile")
+        ?: System.getenv("PRISM_KEYSTORE_FILE"))?.takeIf { it.isNotBlank() }?.let(::file)
+    val hasReleaseKey = releaseStoreFile != null && releaseStoreFile.exists()
+
+    signingConfigs {
+        if (hasReleaseKey) {
+            create("release") {
+                storeFile = releaseStoreFile
+                storePassword = keystoreProps.getProperty("storePassword")
+                    ?: System.getenv("PRISM_KEYSTORE_PASSWORD")
+                keyAlias = keystoreProps.getProperty("keyAlias")
+                    ?: System.getenv("PRISM_KEY_ALIAS")
+                keyPassword = keystoreProps.getProperty("keyPassword")
+                    ?: System.getenv("PRISM_KEY_PASSWORD")
+            }
+        }
+    }
+
     buildTypes {
         release {
             isMinifyEnabled = true
@@ -31,6 +56,12 @@ android {
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
             )
+            signingConfig = if (hasReleaseKey) {
+                signingConfigs.getByName("release")
+            } else {
+                logger.warn("odysseus: no release keystore, signing release with the debug key")
+                signingConfigs.getByName("debug")
+            }
         }
         debug {
             isMinifyEnabled = false

@@ -1,0 +1,90 @@
+name: Release
+
+# Builds an installable APK and attaches it to a GitHub Release.
+#
+# Trigger it by pushing a tag, e.g.:
+#   git tag v0.1.0 && git push origin v0.1.0
+#
+# Signing:
+#   Without secrets the release APK is signed with the debug key (fine for
+#   side-loading, not for Play Store). To sign properly, add these repository
+#   secrets and the keystore as a base64 secret:
+#     PRISM_KEYSTORE_BASE64, PRISM_KEYSTORE_PASSWORD, PRISM_KEY_ALIAS,
+#     PRISM_KEY_PASSWORD
+on:
+  push:
+    tags: [ "v*" ]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  apk:
+    name: Build APK and publish
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - uses: android-actions/setup-android@v3
+
+      - name: Install SDK packages
+        run: sdkmanager "platforms;android-34" "build-tools;34.0.0" | tail -2
+
+      - name: Restore keystore (optional)
+        if: ${{ secrets.PRISM_KEYSTORE_BASE64 != '' }}
+        run: |
+          echo "${{ secrets.PRISM_KEYSTORE_BASE64 }}" | base64 -d > "$RUNNER_TEMP/prism-release.jks"
+          echo "PRISM_KEYSTORE_FILE=$RUNNER_TEMP/prism-release.jks" >> "$GITHUB_ENV"
+          echo "PRISM_KEYSTORE_PASSWORD=${{ secrets.PRISM_KEYSTORE_PASSWORD }}" >> "$GITHUB_ENV"
+          echo "PRISM_KEY_ALIAS=${{ secrets.PRISM_KEY_ALIAS }}" >> "$GITHUB_ENV"
+          echo "PRISM_KEY_PASSWORD=${{ secrets.PRISM_KEY_PASSWORD }}" >> "$GITHUB_ENV"
+
+      - name: Assemble release APK
+        working-directory: android
+        run: |
+          chmod +x gradlew
+          ./gradlew :app:assembleRelease --console=plain --no-daemon
+
+      - name: Assemble debug APK
+        working-directory: android
+        run: ./gradlew :app:assembleDebug --console=plain --no-daemon
+
+      - name: Rename artifacts
+        working-directory: android/app/build/outputs/apk
+        run: |
+          VERSION="${GITHUB_REF_NAME:-dev}"
+          mkdir -p "$RUNNER_TEMP/out"
+          cp release/app-release.apk "$RUNNER_TEMP/out/prism-${VERSION}-release.apk" 2>/dev/null || true
+          cp debug/app-debug.apk "$RUNNER_TEMP/out/prism-${VERSION}-debug.apk"
+
+      - name: Upload workflow artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: prism-apk
+          path: ${{ runner.temp }}/out/*.apk
+          if-no-files-found: error
+
+      - name: Publish GitHub Release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: ${{ runner.temp }}/out/*.apk
+          generate_release_notes: true
+          body: |
+            ## Install
+
+            1. Download `prism-${{ github.ref_name }}-release.apk` (or `-debug.apk`).
+            2. Allow "Install unknown apps" for your file manager / browser.
+            3. Open the APK and install. Android 10 or newer (arm64).
+
+            No models are bundled: open the app, go to **Models** and download
+            what you need (the app is fully offline afterwards).
+
+            The PC server is a separate product: see `pc/` and
+            `python -m uvicorn unified_server:app --host 0.0.0.0 --port 8101`.
