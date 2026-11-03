@@ -27,7 +27,8 @@ android {
     // Release signing is optional. When keystore.properties (or the matching
     // env vars) is absent the release variant is signed with the debug key so
     // `assembleRelease` still produces an installable APK for side-loading.
-    val keystoreProps = java.util.Properties().apply {
+    // `java` resolves to the java extension here, so use the imported Properties.
+    val keystoreProps = Properties().apply {
         val f = rootProject.file("keystore.properties")
         if (f.exists()) f.inputStream().use { load(it) }
     }
@@ -51,7 +52,15 @@ android {
 
     buildTypes {
         release {
-            isMinifyEnabled = true
+            // R8 currently fails on the Ktor + Netty + ONNX Runtime + Gson
+            // combination (com.android.build.gradle.internal.tasks.R8Task
+            // "Compilation failed to complete") and there is no ProGuard
+            // config covering those libraries yet. Shipping an installable,
+            // un-minified APK is better than shipping a build that does not
+            // exist; re-enable once proguard-rules.pro covers the stack and
+            // the result has been smoke-tested on a device.
+            isMinifyEnabled = false
+            isShrinkResources = false
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
