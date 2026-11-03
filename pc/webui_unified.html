@@ -181,6 +181,10 @@ canvas#maskpad { width: 100%; border-radius: 6px; border: 1px solid var(--border
 <div class="row">
 <div><label><input type="checkbox" id="trsplit"> Split into 30s chunks (remote WhisperApi only)</label></div>
 </div>
+<div class="row">
+<div><label>Post-process (Gemma4 E2B, loads on first use)</label><select id="trpp"><option value="" selected>none</option><option value="cleanup">cleanup (fix spelling/punctuation)</option><option value="translate">translate</option><option value="summarize">summarize</option><option value="rewrite">rewrite</option></select></div>
+<div><label>Post-process target language</label><select id="trpplang"><option value="sk" selected>sk</option><option value="cs">cs</option><option value="en">en</option><option value="de">de</option><option value="pl">pl</option><option value="uk">uk</option><option value="hu">hu</option></select></div>
+</div>
 <button class="go" id="btnTr" onclick="generateTr()">Transcribe</button>
 <div class="hint" id="trjob"><span id="trjobText"></span> <a href="#" id="trstop" style="display:none;color:#ff7b72" onclick="cancelJob();return false">stop</a></div>
 <div id="txtout">transcript appears here…</div>
@@ -733,7 +737,12 @@ async function generateTr(){
   fd.append('auto_split', split ? 'true' : 'false');
   const fmt = document.getElementById('trformat').value;
   fd.append('response_format', fmt);
-  btn.disabled = true; btn.textContent = 'Transcribing…';
+  const pp = document.getElementById('trpp').value;
+  if (pp) {
+    fd.append('post_process', pp);
+    fd.append('post_process_lang', document.getElementById('trpplang').value || 'sk');
+  }
+  btn.disabled = true; btn.textContent = pp ? 'Transcribing + Gemma4…' : 'Transcribing…';
   log('POST /v1/audio/transcriptions model='+model+' file='+f.name+' ('+(f.size/1024/1024).toFixed(1)+' MB) split='+split);
   const t0 = Date.now();
   try {
