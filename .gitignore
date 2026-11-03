@@ -108,3 +108,6 @@ android/third_party/
 
 # desloppify generated scorecard
 scorecard.png
+
+# opencode session artifacts (desloppify skill copy)
+.opencode/

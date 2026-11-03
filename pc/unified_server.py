@@ -99,10 +99,9 @@ async def _idle_unloader():
         try:
             if not should_idle_unload(_manager, IDLE_UNLOAD_SECONDS):
                 continue
-            if True:
-                logger.info("idle unload after %.0fs (limit %ss)",
-                            _manager.idle_seconds(), IDLE_UNLOAD_SECONDS)
-                _manager.unload("idle")
+            logger.info("idle unload after %.0fs (limit %ss)",
+                        _manager.idle_seconds(), IDLE_UNLOAD_SECONDS)
+            _manager.unload("idle")
         except Exception as e:
             logger.warning("idle unloader: %s", e)
 
@@ -1151,7 +1150,7 @@ def batch(req: BatchRequest):
     threading.Thread(target=_run_batch, args=(bid, req.jobs, req.stop_on_error),
                      daemon=True).start()
     return {"id": bid, "state": "running", "total": len(req.jobs),
-            "request_id": rid if False else bid}
+            "request_id": bid}
 
 
 @app.get("/v1/batch/{bid}")
