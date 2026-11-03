@@ -151,3 +151,28 @@ encoding, VP9/WebM, H.265 transcode) answers 503 with the reason. There is no
 remaining PC-only endpoint; the difference is depth: the PC can transcode to
 arbitrary codecs and target sizes, the phone re-encodes to H.264 at a fixed
 target.
+
+## Transcription engines (PC): faster-whisper, Nemotron, Gemma4
+
+Three engines are wired into the PC server; the Android app still uses
+whisper.cpp only.
+
+| Engine | How to select | Size | Notes |
+|---|---|---|---|
+| faster-whisper | default, model=tiny|base|small|medium|turbo|large | 75 MB - 3 GB | chunked, 5-min segments for long audio |
+| NVIDIA Nemotron 3.5 ASR 0.6B | model=nemotron-asr-0.6b or PRISM_ASR_ENGINE=nemotron | 2.55 GB | FastConformer-RNNT, 40 languages (sk=28 in the prompt dictionary), native punctuation. Live: JFK 2.7 s warm vs whisper 10.3 s |
+| Gemma4 E2B (post-processing) | post_process=cleanup|translate|summarize|rewrite | 10.25 GB | text-in/text-out only, not a transcription engine |
+
+Measured on this machine (RTX 3060 6 GB, 32 GB RAM):
+
+- Nemotron loads in ~20 s from page cache and transcribes a 11 s clip in 2.7 s.
+- Gemma4 E2B does **not** fit in 6 GB VRAM; init() detects that and falls back
+  to CPU. CPU load is 9-10 min, inference 13-35 s per short text.
+- Gemma4 	ranslate and summarize produce correct output on CPU bf16.
+  cleanup produces **mangled Slovak diacritics** (`á` -> `A?`) with bf16.
+  float32 fixes precision but needs ~20 GB of RAM and starts swapping on a
+  32 GB machine at ~49 % load, so it stays an opt-in
+  (`PRISM_GEMMA_DTYPE=float32`).
+- Correct long-term fix for Gemma4 on PC: a GGUF build with llama.cpp
+  (3.1 GB Q4_K_M, minutes instead of hours). Not wired yet; it needs
+  `llama-cpp-python` (a compiled dependency) and a second code path.
