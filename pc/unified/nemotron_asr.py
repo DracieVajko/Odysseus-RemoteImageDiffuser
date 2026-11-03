@@ -100,9 +100,22 @@ def init(model_id: str = None) -> bool:
 
         d = str(_model_dir(mid))
         _device = (os.environ.get("PRISM_NEMOTRON_DEVICE") or _auto_device()).strip().lower()
-        dtype = torch.bfloat16 if _device == "cuda" else torch.float32
+        # float32 on purpose: the predictor is an LSTM and cuDNN in bf16 made a
+        # single 11 s clip hang for minutes ("RNN module weights are not part of
+        # single contiguous chunk of memory", re-compacting on every call).
+        # 0.6B in fp32 is 2.55 GB, which fits the 6 GB card.
+        dtype = torch.float32
         _processor = AutoProcessor.from_pretrained(d)
         _model = AutoModelForRNNT.from_pretrained(d, dtype=dtype, device_map=_device)
+        _model.eval()
+        # Flatten the LSTM weights once instead of on every forward.
+        for module in _model.modules():
+            flatten = getattr(module, "flatten_parameters", None)
+            if callable(flatten) and type(module).__name__ in ("LSTM", "GRU", "RNN"):
+                try:
+                    flatten()
+                except Exception:
+                    pass
         logger.info("Nemotron ASR %s loaded on %s", mid, _device)
         return True
     except Exception as e:
