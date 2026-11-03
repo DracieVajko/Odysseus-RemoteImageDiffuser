@@ -1081,40 +1081,48 @@ class MainActivity : AppCompatActivity() {
                     val text = j.optString("text", "")
                     if (text.isNotEmpty()) {
                         var finalText = text
+                        // Only claim Gemma4 ran when it actually produced the text.
+                        var ppNote = ""
                         if (switchGemma.isChecked) {
                             transcribeStatus.text = "post-processing with Gemma4..."
                             transcribeProgress.visibility = android.view.View.VISIBLE
                             try {
                                 val modelPath = findGemmaModelPath()
-                                if (modelPath != null) {
+                                if (modelPath == null) {
+                                    ppNote = " (Gemma4 skipped: model not downloaded)"
+                                } else {
                                     val handle = GemmaLib.loadTextModel(modelPath)
-                                    if (handle != 0L) {
+                                    if (handle == 0L) {
+                                        ppNote = " (Gemma4 skipped: model failed to load)"
+                                    } else {
                                         val mode = spinnerGemmaMode.selectedItem?.toString() ?: "cleanup"
                                         val targetLang = spinnerLang.selectedItem?.toString() ?: "sk"
                                         val prompt = when (mode) {
-                                            "cleanup" -> "Fix spelling, grammar, and punctuation in this transcription. Keep the original language. Return only the corrected text:\\n\\n$text"
-                                            "translate" -> "Translate the following text to ${langName(targetLang)}. Return only the translation:\\n\\n$text"
-                                            "summarize" -> "Summarize the following text in a few sentences. Return only the summary:\\n\\n$text"
-                                            "rewrite" -> "Rewrite the following text to be clearer and more readable. Return only the rewritten text:\\n\\n$text"
+                                            "cleanup" -> "Fix spelling, grammar, and punctuation in this transcription. Keep the original language. Return only the corrected text:\n\n$text"
+                                            "translate" -> "Translate the following text to ${langName(targetLang)}. Return only the translation:\n\n$text"
+                                            "summarize" -> "Summarize the following text in a few sentences. Return only the summary:\n\n$text"
+                                            "rewrite" -> "Rewrite the following text to be clearer and more readable. Return only the rewritten text:\n\n$text"
                                             else -> text
                                         }
-                                        val result = GemmaLib.generateText(handle, prompt, 2048)
-                                        if (result != null && result.isNotBlank()) {
-                                            finalText = result.trim()
-                                        }
+                                        val result = GemmaLib.generateText(handle, prompt, 1024)
                                         GemmaLib.releaseTextModel(handle)
+                                        if (result != null && result.isNotBlank()
+                                            && !result.contains('\uFFFD')) {
+                                            finalText = result.trim()
+                                            ppNote = " (Gemma4 $mode)"
+                                        } else {
+                                            ppNote = " (Gemma4 returned nothing usable)"
+                                        }
                                     }
-                                } else {
-                                    transcribeStatus.text = "Gemma4 model not downloaded"
                                 }
                             } catch (e: Exception) {
-                                transcribeStatus.text = "Gemma4 error: ${e.message}"
+                                ppNote = " (Gemma4 error: ${e.message})"
                             }
                             transcribeProgress.visibility = android.view.View.GONE
                         }
                         transcribeOut.setText(finalText)
-                        transcribeStatus.text = "done: ${finalText.length} chars, ${j.optInt("chunks", 1)} chunk(s)" +
-                            if (switchGemma.isChecked) " (Gemma4)" else ""
+                        transcribeStatus.text = "done: ${finalText.length} chars, " +
+                            "${j.optInt("chunks", 1)} chunk(s)$ppNote"
                         btnSaveTranscript.visibility = android.view.View.VISIBLE
                     } else {
                         transcribeStatus.text = "error: " + j.optString("error", resp)
@@ -1531,9 +1539,16 @@ class MainActivity : AppCompatActivity() {
         activityLog.text = if (logLines.isEmpty()) "ready" else logLines.joinToString("\n")
     }
 
+    /**
+     * Resolve the on-device Gemma4 GGUF through the model downloader, not a
+     * hand-built path: the downloader writes to getExternalFilesDir()/models,
+     * so `filesDir/models/...` never matched and every call looked "not
+     * downloaded".
+     */
     private fun findGemmaModelPath(): String? {
-        val modelsDir = java.io.File(filesDir, "models/gemma4-e2b-gguf")
-        val gguf = modelsDir.listFiles()?.firstOrNull { it.name.endsWith(".gguf") }
+        val id = "gemma4-e2b-gguf"
+        if (!downloader.isReady(id)) return null
+        val gguf = downloader.modelDir(id).listFiles()?.firstOrNull { it.name.endsWith(".gguf") }
         return gguf?.absolutePath
     }
 
