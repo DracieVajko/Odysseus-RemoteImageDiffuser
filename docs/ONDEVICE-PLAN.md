@@ -176,3 +176,20 @@ Measured on this machine (RTX 3060 6 GB, 32 GB RAM):
 - Correct long-term fix for Gemma4 on PC: a GGUF build with llama.cpp
   (3.1 GB Q4_K_M, minutes instead of hours). Not wired yet; it needs
   `llama-cpp-python` (a compiled dependency) and a second code path.
+
+## Android memory limits under load (measured 2026-11-03)
+
+A 3 GB model download running at the same time as batch image generation killed
+the process: `dumpsys activity exit-info` reported
+`reason=3 (LOW_MEMORY)`, `rss=1,5GB`. The downloader itself is fine (256 KB
+buffer, HTTP Range resume verified: a restart continued at 2.24 GB instead of
+0), so the pressure comes from the resident LCM engine plus generation alongside
+the download's page cache.
+
+Practical rule: do not run heavy generation while a large model download is in
+progress. The memory watchdog (45 s idle release, 15 s poll under 1.5 GB) does
+not cover this case because the engine is busy, not idle.
+
+Also cleaned up: a 711 MB abandoned `sd15-onnx` staging directory that had
+survived since 2026-10-22. Staging paths are per-model, so an abandoned download
+is invisible to the catalog and never garbage-collected.
