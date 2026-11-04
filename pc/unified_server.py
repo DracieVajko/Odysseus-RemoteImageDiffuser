@@ -40,6 +40,9 @@ from unified.ffmpeg_tools import (
 )
 from unified.engine import init_diffusion_engine, try_real_inpaint
 from unified.model_manager import ModelManager, ModelLoadingError
+from unified.action_extractor import ActionExtractor
+from unified.action_handlers import process_action, process_actions
+from unified.ai_client import AIClient, get_ai_client
 from unified.registry import build_registry
 from unified.upscale import upscale_image_b64
 from unified.vlm import MODEL_ID as VLM_ID, caption_image_b64, EngineMissing, release_vlm
@@ -1507,6 +1510,9 @@ async def transcriptions(
     request_id: str = Form(default=""),
     post_process: str = Form(default=""),
     post_process_lang: str = Form(default=""),
+    action_extract: str = Form(default=""),
+    ai_provider: str = Form(default=""),
+    ai_model: str = Form(default=""),
 ):
     # Called directly (translations) FastAPI defaults are still Form objects.
     if not isinstance(request_id, str):
@@ -1643,6 +1649,20 @@ async def transcriptions(
                     logger.info("Gemma4 post-processing applied: %s", post_process)
             except Exception as e:
                 logger.warning("Gemma4 post-processing failed: %s", str(e)[:200])
+
+        # Optional AI action extraction (calendar, todo, email, reminder, etc.)
+        if action_extract and text and not text.startswith("[unified stub"):
+            try:
+                ai_client = get_ai_client()
+                extractor = ActionExtractor(ai_client)
+                actions = await extractor.extract(text, provider=ai_provider, model=ai_model)
+                action_results = await process_actions(actions)
+                logger.info("Action extraction: %d action(s) extracted from transcription", len(actions))
+            except Exception as e:
+                logger.warning("Action extraction failed: %s", str(e)[:200])
+                action_results = []
+        else:
+            action_results = []
         _job_finish(rid, "done")
         fmt = (response_format or "json").strip().lower()
         if fmt in ("srt", "vtt"):
@@ -1661,13 +1681,15 @@ async def transcriptions(
             meta = _store_output("text", ".txt", text.encode("utf-8"), rid)
             return {"text": text, "language": lang, "engine": engine,
                     "duration": get_audio_duration(Path(tmp)),
-                    "segments": segments, "outputs": [meta]}
+                    "segments": segments, "outputs": [meta],
+                    "actions": [a.to_dict() for a in action_results] if action_results else []}
         if fmt == "text":
             from fastapi.responses import PlainTextResponse
             return PlainTextResponse(text)
         meta = _store_output("text", ".txt", text.encode("utf-8"), rid)
         return {"text": text, "language": lang, "engine": engine,
-                "segments": segments, "outputs": [meta]}
+                "segments": segments, "outputs": [meta],
+                "actions": [a.to_dict() for a in action_results] if action_results else []}
     except JobCancelled:
         _job_finish(rid, "cancelled")
         return JSONResponse(status_code=409, content={
@@ -1699,8 +1721,34 @@ async def translations(
 
 
 @app.post("/transcribe")
-async def transcribe_alias(file: UploadFile = File(...), language: str = Form(default=None)):
-    return await transcriptions(file=file, language=language)
+async def transcribe_alias(
+    file: UploadFile = File(...),
+    language: str = Form(default=None),
+    model: str = Form(default="whisper-1"),
+    response_format: str = Form(default="json"),
+    auto_split: str = Form(default="true"),
+    request_id: str = Form(default=""),
+    post_process: str = Form(default=""),
+    post_process_lang: str = Form(default=""),
+    action_extract: str = Form(default=""),
+    ai_provider: str = Form(default=""),
+    ai_model: str = Form(default=""),
+):
+    return await transcriptions(
+        file=file,
+        language=language,
+        model=model,
+        model_name=model,
+        device="",
+        response_format=response_format,
+        auto_split=auto_split,
+        request_id=request_id,
+        post_process=post_process,
+        post_process_lang=post_process_lang,
+        action_extract=action_extract,
+        ai_provider=ai_provider,
+        ai_model=ai_model,
+    )
 
 
 @app.post("/v1/text/process")
