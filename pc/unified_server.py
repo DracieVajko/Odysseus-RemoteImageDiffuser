@@ -1475,8 +1475,7 @@ async def _transcribe_with_splitting(audio_path: Path, wanted: str, language,
     faster-whisper handles long files with its own VAD, so splitting is only
     used for the remote WhisperApi fallback (and for legacy engines).
     """
-    def _transcribe_single(path: Path, lang: Optional[str]) -> Tuple[str, str, list]:
-        return _transcribe_with_whisper(str(path), wanted, lang, rid)
+    _transcribe_single = lambda path, lang: _transcribe_with_whisper(str(path), wanted, lang, rid)
 
     try:
         import faster_whisper  # noqa: F401
@@ -1767,9 +1766,7 @@ class TrimRequest(BaseModel):
     request_id: Optional[str] = ""
 
 
-@app.get("/v1/ffmpeg/presets")
-def ffmpeg_presets():
-    return get_presets()
+app.get("/v1/ffmpeg/presets")(get_presets)
 
 
 @app.post("/v1/ffmpeg/convert-video")

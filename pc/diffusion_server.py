@@ -30,6 +30,7 @@ import threading
 import time
 import uuid
 from pathlib import Path
+from dataclasses import dataclass, field, fields
 
 from contextlib import asynccontextmanager, contextmanager
 
@@ -75,7 +76,41 @@ def _setup_logging(level: str, log_file: str):
 _pipe = None
 _model_id = ""
 DTYPE_MAP = {"bfloat16": torch.bfloat16, "float16": torch.float16, "float32": torch.float32}
-_args = None
+@dataclass
+class EngineConfig:
+    """Typed configuration for the diffusion engine, replacing the old
+    argparse.Namespace bag that was used as an implicit global parameter bag."""
+
+    model: str = ""
+    lazy: bool = True
+    models_json: str = os.environ.get("DIFFUSION_MODELS_JSON", "")
+    default_model: str = ""
+    lora: str | None = None
+    lora_scale: float = 1.0
+    port: int = int(os.environ.get("DIFFUSION_PORT", "8101"))
+    host: str = os.environ.get("DIFFUSION_HOST", "127.0.0.1")
+    dtype: str = "bfloat16"
+    device_map: str | None = None
+    steps: int = 0
+    guidance_scale: float = 3.5
+    negative_prompt: str = ""
+    single_file_config: str = ""
+    pipeline: str = ""
+    width: int = 1024
+    height: int = 1024
+    cpu_offload: bool = False
+    attention_slicing: bool = False
+    vae_slicing: bool = False
+    disable_safety_checker: bool = False
+    log_file: str = ""
+    log_level: str = "INFO"
+    harmonize_gpu: int | None = None
+    allowed_host: list = field(default_factory=list)
+    allowed_origin: list = field(default_factory=list)
+    _registry_negative: str = ""
+
+
+_args = EngineConfig()
 _PROGRESS = {}
 
 # ---- Lazy model registry (models.json is the single source of truth) ----
@@ -1011,43 +1046,13 @@ def _resolve_model_id(requested: str | None) -> str:
 
 
 def _embed_default_args():
-    """Argparse defaults for embedding (unified_server imports this module).
+    """Engine config defaults for embedding (unified_server imports this module).
 
-    Without a Namespace the generation path dereferences `_args.model`,
+    Without an EngineConfig the generation path dereferences `_args.model`,
     `_args.cpu_offload`, ... and crashes, so the embedder used to fall back to
     the ONNX pipeline without saying so.
     """
-    import argparse
-
-    ns = argparse.Namespace()
-    ns.model = ""
-    ns.lazy = True
-    ns.models_json = os.environ.get("DIFFUSION_MODELS_JSON", "")
-    ns.default_model = ""
-    ns.lora = None
-    ns.lora_scale = 1.0
-    ns.port = int(os.environ.get("DIFFUSION_PORT", "8101"))
-    ns.host = os.environ.get("DIFFUSION_HOST", "127.0.0.1")
-    ns.dtype = "bfloat16"
-    ns.device_map = None
-    ns.steps = 0
-    ns.guidance_scale = 3.5
-    ns.negative_prompt = ""
-    ns.single_file_config = ""
-    ns.pipeline = ""
-    ns.width = 1024
-    ns.height = 1024
-    ns.cpu_offload = False
-    ns.attention_slicing = False
-    ns.vae_slicing = False
-    ns.disable_safety_checker = False
-    ns.log_file = ""
-    ns.log_level = "INFO"
-    ns.harmonize_gpu = None
-    ns.allowed_host = []
-    ns.allowed_origin = []
-    ns._registry_negative = ""
-    return ns
+    return EngineConfig()
 
 
 def ensure_registry() -> dict:
@@ -2638,7 +2643,12 @@ if __name__ == "__main__":
         help="Additional CORS origin to allow. Can be repeated. Defaults to "
              "no cross-origin access — only pass this if you need a browser "
              "on a specific origin to call the server.")
-    _args = parser.parse_args()
+    _args = EngineConfig()
+    # Copy parsed args into the dataclass instance (only fields that exist)
+    ns = vars(args)
+    for field in dataclasses.fields(_args):
+        if field.name in ns:
+            setattr(_args, field.name, ns[field.name])
 
     _setup_logging(getattr(_args, "log_level", "INFO"), getattr(_args, "log_file", ""))
 

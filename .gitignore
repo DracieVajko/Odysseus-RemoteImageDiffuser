@@ -111,3 +111,9 @@ scorecard.png
 
 # opencode session artifacts (desloppify skill copy)
 .opencode/
+
+# desloppify local state (do not commit)
+.desloppify/
+
+# Claude skills (downloaded by desloppify skill)
+.claude/
